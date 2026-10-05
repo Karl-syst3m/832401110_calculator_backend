@@ -100,6 +100,29 @@ BT Panel does not overwrite files placed there by hand (it only rewrites the sit
 configurations it created itself).
 The matching template: `deploy/nginx-bt-panel.conf.example`.
 
+**This needs a second file as well: `deploy/calculator-security-headers.conf.example`.**
+
+nginx's `add_header` does **not** merge with the parent context. If a `location`
+declares even one `add_header` of its own, every header inherited from the enclosing
+`server` block is discarded **for that location** — the two sets are not combined.
+
+All three locations in this template set their own `Cache-Control`, so the four security
+headers written at server level reach none of them. Measured on the deployed site before
+the fix (`curl -D -`):
+
+```
+GET /                -> Cache-Control only, no security headers
+GET /css/style.css   -> Cache-Control only, no security headers
+GET /api/health      -> Cache-Control only, no security headers
+```
+
+So `Content-Security-Policy` — the header that matters most on the HTML response — was
+effectively switched off in production while the configuration looked correct on review.
+nginx 1.26 has no `add_header_inherit merge` (that arrived in 1.29.3), so the headers have
+to be re-declared inside each location. They live in one shared file that all three
+locations `include`, so there is still a single place to edit. If you add another location
+with its own `add_header`, include that file there too.
+
 **Adjustment two: use port 80, not 8000.**
 
 The allow rules are a **two-layer whitelist**: ufw and the cloud security group.
@@ -144,8 +167,10 @@ sudo mkdir -p /www/wwwroot/calculator
 sudo cp -r calculator_frontend/src/. /www/wwwroot/calculator/
 sudo chown -R www:www /www/wwwroot/calculator
 
-# nginx site
+# nginx site — two files: the vhost and the shared security-header snippet
 sudo cp deploy/nginx-bt-panel.conf.example /www/server/panel/vhost/nginx/calculator.conf
+sudo cp deploy/calculator-security-headers.conf.example \
+        /www/server/panel/vhost/nginx/calculator-security-headers.conf
 sudo sed -i 's/<SERVER_IP>/your-public-IP/; s|<FRONTEND_ROOT>|/www/wwwroot/calculator|' \
      /www/server/panel/vhost/nginx/calculator.conf
 sudo nginx -t && sudo systemctl reload nginx
@@ -153,6 +178,13 @@ sudo nginx -t && sudo systemctl reload nginx
 # no firewall changes needed
 # verify
 curl -s http://127.0.0.1/api/health
+# verify the security headers actually made it onto the responses
+# (they are dropped entirely unless the include is present in each location)
+for u in / /css/style.css /api/health; do
+  printf '%-16s ' "$u"
+  curl -s -D - -o /dev/null "http://127.0.0.1$u" | grep -ciE \
+    'x-content-type-options|x-frame-options|referrer-policy|content-security-policy'
+done   # each line should print 4
 ```
 
 > This hand-created site will not appear in BT Panel's "Websites" list.
