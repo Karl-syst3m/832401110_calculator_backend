@@ -1,34 +1,36 @@
-# 依赖
+# Dependencies
 node_modules/
 
-# 运行时数据（SQLite 数据库文件，不入库）
+# Runtime data (SQLite database files, not committed)
 #
-# 注意开头这个斜杠——它把规则锚定在仓库根目录。
-# 如果写成 `data/`（不带斜杠），git 会匹配**任意层级**下名为 data 的目录，
-# 于是连源码目录 src/data/ 也会被一并排除，导致 src/data/units.js 根本不会被提交。
+# Note the leading slash — it anchors the rule to the repository root.
+# If it were written as `data/` (without the slash), git would match a directory
+# named data at **any level**, so the source directory src/data/ would be excluded
+# along with it, and src/data/units.js would never be committed at all.
 #
-# 这个坑真实发生过：本地测试全绿（文件在本地是存在的），
-# 直到部署到服务器才报
+# This trap really did happen: local tests were all green (the file did exist locally),
+# and the failure only showed up after deploying to the server:
 #   Error [ERR_MODULE_NOT_FOUND]: Cannot find module '.../src/data/units.js'
-# 排查时因为"本地明明是好的"而绕了一圈，最后用
+# While troubleshooting we went around in a circle because "it works fine locally",
+# until
 #   git check-ignore -v src/data/units.js
-# 才定位到是这一行规则造成的。
+# pinpointed that this one rule was the cause.
 /data/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
 *.db
 
-# 环境变量
+# Environment variables
 .env
 .env.local
 
-# 日志
+# Logs
 logs/
 *.log
 npm-debug.log*
 
-# 编辑器 / 系统
+# Editor / OS
 .vscode/
 .idea/
 .DS_Store

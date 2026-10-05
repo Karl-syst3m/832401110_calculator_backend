@@ -1,20 +1,20 @@
 /**
- * 集中式配置。
+ * Centralized configuration.
  *
- * 设计说明：把「所有来自环境的东西」收敛到一个模块，其余代码一律通过
- * `config` 取值，不再直接读 process.env。这样做的好处是：
- *   1. 默认值只有一处，本地开发无需任何配置即可启动；
- *   2. 部署时只改环境变量，不用改代码；
- *   3. 测试可以直接构造一份配置对象注入，不必污染真实环境变量。
+ * Design notes: "everything that comes from the environment" is funneled into one module, and all
+ * other code reads values through `config` instead of touching process.env directly. The benefits are:
+ *   1. default values live in exactly one place, so local development needs no configuration at all to start;
+ *   2. deployment only changes environment variables, never code;
+ *   3. tests can construct a configuration object and inject it, without polluting the real environment variables.
  */
 
 import path from 'node:path';
 import process from 'node:process';
 
-/** 项目根目录（src/config/index.js -> 上溯两级） */
+/** Project root directory (src/config/index.js -> two levels up) */
 const projectRoot = path.resolve(import.meta.dirname, '..', '..');
 
-/** 把 "5500,http://localhost:5500" 这类字符串解析成数组。 */
+/** Parse a string such as "5500,http://localhost:5500" into an array. */
 function parseList(value, fallback) {
   if (typeof value !== 'string' || value.trim() === '') {
     return fallback;
@@ -33,38 +33,41 @@ function parseInteger(value, fallback) {
 const nodeEnv = process.env.NODE_ENV ?? 'development';
 
 export const config = {
-  /** 运行环境：development | production | test */
+  /** Runtime environment: development | production | test */
   nodeEnv,
   isProduction: nodeEnv === 'production',
   isTest: nodeEnv === 'test',
 
-  /** 项目根目录绝对路径 */
+  /** Absolute path of the project root directory */
   projectRoot,
 
   server: {
     port: parseInteger(process.env.PORT, 5000),
     /**
-     * 只监听回环地址时，外部无法直连，必须经由 nginx 反向代理访问。
-     * 生产环境默认 127.0.0.1 是更安全的姿态：后端不直接暴露公网。
+     * When only the loopback address is listened on, the outside world cannot connect directly
+     * and must go through the nginx reverse proxy. Defaulting to 127.0.0.1 in production is the
+     * safer posture: the backend is not exposed to the public internet directly.
      */
     host: process.env.HOST ?? '127.0.0.1',
-    /** 单次请求体上限。表达式很短，64kb 已绰绰有余，同时挡掉超大请求体攻击。 */
+    /** Maximum size of a single request body. Expressions are short, so 64kb is more than enough, and it also blocks oversized-request attacks. */
     bodyLimit: process.env.BODY_LIMIT ?? '64kb',
   },
 
   database: {
     /**
-     * SQLite 数据文件路径。默认放在项目的 data/ 目录下，
-     * 该目录已在 .gitignore 中排除，数据库属于运行时产物，不应提交。
+     * SQLite data file path. By default it sits in the project's data/ directory,
+     * which .gitignore already excludes; the database is a runtime artifact and should not be committed.
      */
     file: process.env.DB_FILE ?? path.join(projectRoot, 'data', 'calculator.sqlite'),
   },
 
   cors: {
     /**
-     * 允许跨域访问的来源白名单。
-     * 生产环境建议让 nginx 把前端与 /api 放在同一个源下，此时浏览器根本不会发起跨域请求，
-     * 白名单留空即可。开发环境前端用 http://localhost:5500 起静态服务，需要显式放行。
+     * Whitelist of origins allowed to make cross-origin requests.
+     * In production it is recommended to have nginx serve the front end and /api from the same
+     * origin; then the browser never issues a cross-origin request at all and the whitelist can
+     * stay empty. In development the front end serves static files from http://localhost:5500,
+     * so it must be allowed explicitly.
      */
     allowedOrigins: parseList(process.env.CORS_ORIGINS, [
       'http://localhost:5500',
@@ -78,10 +81,10 @@ export const config = {
     level: process.env.LOG_LEVEL ?? (nodeEnv === 'test' ? 'error' : 'info'),
   },
 
-  /** 业务规则：单个表达式的最大长度。 */
+  /** Business rules: the maximum length of a single expression. */
   calculator: {
     maxExpressionLength: parseInteger(process.env.MAX_EXPRESSION_LENGTH, 200),
-    /** 历史记录分页时每页允许的最大条数，防止前端传个 pageSize=100000 把内存打满。 */
+    /** Maximum number of records allowed per page when paginating history, so the front end cannot fill memory by passing pageSize=100000. */
     maxPageSize: 100,
     defaultPageSize: 20,
   },

@@ -1,58 +1,61 @@
 # =============================================================================
-# nginx 站点配置 —— 宝塔面板（BT Panel）环境专用
+# nginx server block — for BT Panel environments
 #
-# ★ 落点：/www/server/panel/vhost/nginx/calculator.conf
+# ★ Where it goes: /www/server/panel/vhost/nginx/calculator.conf
 #
-# 为什么不是 /etc/nginx/sites-available/ ？
-# 本机 nginx 由宝塔面板管理，编译前缀是 /www/server/nginx
-# （`nginx -V` 显示 --prefix=/www/server/nginx），
-# 实际情况是：
-#   - /etc/nginx/nginx.conf         不存在
-#   - /etc/nginx/sites-available/   不存在
-#   - /etc/nginx/sites-enabled/     不存在（是空的）
-#   - /etc/nginx/ 下只有 ssl/ 与 htpasswd_dsh（给面板自己的服务用）
-# 因此按 Debian 惯例把配置放进 sites-available 再软链到 sites-enabled，
-# 在这台机器上**完全不会生效**。
+# Why not /etc/nginx/sites-available/ ?
+# On this machine nginx is managed by BT Panel and was compiled with the prefix
+# /www/server/nginx (`nginx -V` shows --prefix=/www/server/nginx).
+# The actual situation is:
+#   - /etc/nginx/nginx.conf          does not exist
+#   - /etc/nginx/sites-available/    does not exist
+#   - /etc/nginx/sites-enabled/      does not exist (it is empty)
+#   - under /etc/nginx/ there are only ssl/ and htpasswd_dsh (used by the panel's own services)
+# So following the Debian convention of putting the configuration into sites-available and
+# symlinking it into sites-enabled has **no effect at all** on this machine.
 #
-# 真正生效的路径是 /www/server/nginx/conf/nginx.conf 末尾的：
+# The path that really takes effect is the end of /www/server/nginx/conf/nginx.conf:
 #     include /www/server/panel/vhost/nginx/*.conf;
-# 所以只要把本文件放到那个目录下就会被加载。
-# 面板不会覆盖手工放入的 .conf 文件（它只重写自己创建的站点文件）。
+# so this file is loaded simply by placing it in that directory.
+# The panel does not overwrite .conf files put there by hand (it only rewrites the site
+# files it created itself).
 #
 # ---------------------------------------------------------------------------
-# 端口选择：80
+# Port choice: 80
 #
-# 为什么不另开 8000？因为实测发现本机的放行规则是**两层白名单**：
-#   ufw        : 仅放行 22, 80, 443, 6185, 8443, 8889, 8899, 6100
-#   云安全组    : 实测 80 / 8443 / 6185 / 8899 / 6100 可达，
-#                443 可达（无监听故回 RST），
-#                888 / 8000 / 8080 / 3306 全部被丢弃
-# 也就是说用 8000 必须同时修改 ufw 并在云控制台添加安全组规则，
-# 而 80 已经是现成的、双层都放行的端口，零改动即可使用。
+# Why not open 8000 in addition? Because measurements showed this machine's allow rules
+# form a **two-layer whitelist**:
+#   ufw        : allows only 22, 80, 443, 6185, 8443, 8889, 8899, 6100
+#   cloud security group : measured reachable: 80 / 8443 / 6185 / 8899 / 6100,
+#               443 reachable (answers RST because nothing listens),
+#               888 / 8000 / 8080 / 3306 all dropped
+# In other words, using 8000 would require both editing ufw and adding a security group
+# rule in the cloud console, while 80 is already open at both layers and usable with zero
+# changes.
 #
-# 为什么不写 default_server ？
-# 80 端口上已有宝塔内置的状态服务（server_name 127.0.0.1，
-# 提供 /nginx_status、/phpfpm_xx_status 等监控端点，依赖默认 server 行为）。
-# 我们用自己的 IP 作 server_name 做**精确匹配**即可，
-# 无需也不应抢夺 default_server，这样两边的行为都不受影响。
+# Why not write default_server ?
+# Port 80 already hosts BT Panel's built-in status service (server_name 127.0.0.1, serving
+# monitoring endpoints such as /nginx_status and /phpfpm_xx_status, which depend on default
+# server behavior). Using our own IP as server_name gives an **exact match**, so there is no
+# need — and no right — to seize default_server; both sides keep behaving as before.
 #
-# 部署前必须替换的占位符：
-#   <SERVER_IP>      服务器公网 IP，例如 103.236.57.2
-#   <FRONTEND_ROOT>  前端静态文件目录，本机建议 /www/wwwroot/calculator
+# Placeholders that must be replaced before deployment:
+#   <SERVER_IP>      the server's public IP, for example 103.236.57.2
+#   <FRONTEND_ROOT>  frontend static file directory; on this machine /www/wwwroot/calculator is suggested
 #
-# 启用步骤：
+# How to enable:
 #   sudo cp deploy/nginx-bt-panel.conf.example /www/server/panel/vhost/nginx/calculator.conf
-#   sudo sed -i 's/<SERVER_IP>/你的IP/; s|<FRONTEND_ROOT>|/www/wwwroot/calculator|' \
+#   sudo sed -i 's/<SERVER_IP>/your-IP/; s|<FRONTEND_ROOT>|/www/wwwroot/calculator|' \
 #        /www/server/panel/vhost/nginx/calculator.conf
 #   sudo nginx -t && sudo systemctl reload nginx
 #
-# 回滚（只需删除文件并重载）：
+# Rollback (just delete the file and reload):
 #   sudo rm /www/server/panel/vhost/nginx/calculator.conf
 #   sudo nginx -t && sudo systemctl reload nginx
 # =============================================================================
 
 upstream calculator_backend {
-    # 后端只监听回环地址，不直接暴露公网，所有流量经 nginx 转发
+    # The backend listens only on the loopback address and is never exposed publicly; all traffic is forwarded by nginx
     server 127.0.0.1:5000;
     keepalive 16;
 }
@@ -61,26 +64,27 @@ server {
     listen 80;
     listen [::]:80;
 
-    # 用公网 IP 作 server_name：访问 http://<IP>/ 时 Host 头就是该 IP，
-    # 因此会精确命中这个 server 块，
-    # 而 Host 为 127.0.0.1 的面板监控请求仍然由宝塔的块处理。
+    # Using the public IP as server_name: when http://<IP>/ is requested the Host header is
+    # that IP, so this server block is matched exactly, while panel monitoring requests whose
+    # Host is 127.0.0.1 are still handled by BT Panel's block.
     server_name <SERVER_IP>;
 
-    # ---- 基础安全响应头 ----
-    # 刻意不设置 Strict-Transport-Security（HSTS）：
-    # 本站在纯 HTTP 下运行，设置 HSTS 会让浏览器记住「此站点以后只走 HTTPS」，
-    # 而 IP 又没有证书，结果是把访问者锁在门外。
+    # ---- Basic security response headers ----
+    # Strict-Transport-Security (HSTS) is deliberately not set:
+    # this site runs over plain HTTP, and setting HSTS would make the browser remember that
+    # "this site is HTTPS-only from now on"; since the IP has no certificate, the result
+    # would be locking visitors out.
     add_header X-Content-Type-Options "nosniff" always;
     add_header X-Frame-Options "SAMEORIGIN" always;
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
     add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'" always;
 
-    # ---- 压缩 ----
+    # ---- Compression ----
     gzip on;
     gzip_types text/plain text/css application/javascript application/json image/svg+xml;
     gzip_min_length 1024;
 
-    # ---- 前端静态文件 ----
+    # ---- Frontend static files ----
     root <FRONTEND_ROOT>;
     index index.html;
 
@@ -88,20 +92,21 @@ server {
         try_files $uri $uri/ /index.html;
     }
 
-    # 图片与字体长缓存；本项目文件名不含指纹，因此只对这类资源长缓存
+    # Long cache for images and fonts; file names in this project carry no fingerprint, so
+    # only this kind of resource gets a long cache
     location ~* \.(?:png|jpe?g|gif|webp|svg|ico|woff2?)$ {
         expires 30d;
         add_header Cache-Control "public, immutable";
         try_files $uri =404;
     }
 
-    # HTML 与 JS/CSS 不缓存，保证改完刷新即生效
+    # HTML and JS/CSS are not cached, so an edit takes effect on the next refresh
     location ~* \.(?:html|js|css)$ {
         add_header Cache-Control "no-cache, must-revalidate";
         try_files $uri =404;
     }
 
-    # ---- 后端接口反向代理 ----
+    # ---- Reverse proxy for the backend API ----
     location /api/ {
         proxy_pass http://calculator_backend;
         proxy_http_version 1.1;
@@ -120,15 +125,15 @@ server {
         add_header Cache-Control "no-store";
     }
 
-    # ---- 便于外部探活的健康检查 ----
+    # ---- Health check, convenient for external liveness probing ----
     location = /healthz {
         proxy_pass http://calculator_backend/api/health;
         access_log off;
     }
 
-    # ---- 禁止访问隐藏文件、源码与数据文件 ----
-    # README.md / codestyle.md 放在仓库里是有意义的，
-    # 但不应出现在 Web 目录；这条规则是第二道防线。
+    # ---- Deny access to hidden files, source files, and data files ----
+    # Keeping README.md / codestyle.md in the repository makes sense, but they should not
+    # appear in the web directory; this rule is the second line of defense.
     location ~ /\. {
         deny all;
         return 404;

@@ -1,10 +1,10 @@
 /**
- * 换算接口控制器（扩展功能）。
+ * Conversion endpoint controllers (extension features).
  */
 
 import * as conversionService from '../service/conversion.service.js';
 
-/** POST /api/convert/base —— 进制换算 */
+/** POST /api/convert/base — base conversion */
 export function convertBase(req, res, next) {
   try {
     const body = req.body ?? {};
@@ -19,7 +19,7 @@ export function convertBase(req, res, next) {
   }
 }
 
-/** POST /api/convert/unit —— 单位换算 */
+/** POST /api/convert/unit — unit conversion */
 export function convertUnit(req, res, next) {
   try {
     const body = req.body ?? {};
@@ -36,8 +36,9 @@ export function convertUnit(req, res, next) {
 }
 
 /**
- * GET /api/convert/units —— 返回支持的类别与单位清单
- * 前端用它渲染下拉框，从而保证「换算规则」只有后端这一个事实来源。
+ * GET /api/convert/units — return the supported categories and units
+ * The front end uses it to render the dropdowns, which guarantees that "conversion rules" have the
+ * backend as their single source of truth.
  */
 export function listUnits(req, res, next) {
   try {

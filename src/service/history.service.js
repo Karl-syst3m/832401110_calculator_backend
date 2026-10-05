@@ -1,11 +1,11 @@
 /**
- * 历史记录服务。
+ * History service.
  *
- * 这一层在 model（纯数据访问）与 controller（纯 HTTP）之间承担「业务规则」：
- *   - 分页参数怎么算是合法的；
- *   - 删除一个不存在的记录算不算错误（我们定义算，返回 404）；
- *   - 返回给前端的分页元信息包含哪些字段。
- * 把这类判断集中在 service，controller 可以薄到只剩一行调用。
+ * This layer carries the "business rules" between the model (pure data access) and the controller (pure HTTP):
+ *   - how pagination parameters are computed legally;
+ *   - whether deleting a nonexistent record counts as an error (we define it as one, returning 404);
+ *   - which fields the pagination metadata returned to the front end contains.
+ * Centralizing judgments like these in the service lets the controller stay thin enough to be a single call.
  */
 
 import { AppError, AppErrorCodes } from '../errors/appError.js';
@@ -15,7 +15,7 @@ import config from '../config/index.js';
 const VALID_SORT_FIELDS = new Set(['createdAt', 'result', 'id']);
 const VALID_ORDERS = new Set(['asc', 'desc']);
 
-/** 把字符串解析成整数，失败返回 null。 */
+/** Parse a string into an integer, returning null on failure. */
 function parseIntStrict(value) {
   if (typeof value !== 'string' && typeof value !== 'number') return null;
   const text = String(value).trim();
@@ -24,9 +24,10 @@ function parseIntStrict(value) {
 }
 
 /**
- * 解析并校验历史记录 id。
- * id 必须是不小于 1 的整数，其余一律视为「参数非法」而不是「记录不存在」，
- * 因为前者是调用方写错了，后者是调用方写对了但数据没了，两种情况的处理方式不同。
+ * Parse and validate a history id.
+ * The id must be an integer no smaller than 1; anything else is treated as "illegal parameter" rather than
+ * "record not found", because the former means the caller wrote it wrong while the latter means the caller
+ * wrote it right but the data is gone, and the two are handled differently.
  */
 export function parseHistoryId(rawId) {
   const id = parseIntStrict(rawId);
@@ -41,8 +42,8 @@ export function parseHistoryId(rawId) {
 }
 
 /**
- * 分页查询历史记录。
- * @param {object} query Express 的 req.query
+ * Paginated history query.
+ * @param {object} query Express's req.query
  */
 export function listHistory(query = {}) {
   const rawPage = query.page === undefined ? 1 : parseIntStrict(query.page);
@@ -63,8 +64,8 @@ export function listHistory(query = {}) {
     );
   }
 
-  // 上限校验很关键：若允许 pageSize=1000000，一次请求就能把整表读进内存。
-  // 服务端必须自己兜住这个边界，不能信任前端传来的值。
+  // The upper bound check is crucial: if pageSize=1000000 were allowed, a single request could read the
+  // entire table into memory. The server must hold this boundary itself and cannot trust values from the front end.
   const pageSize = Math.min(rawPageSize, config.calculator.maxPageSize);
 
   const keyword = typeof query.keyword === 'string' ? query.keyword.trim() : '';
@@ -89,15 +90,16 @@ export function listHistory(query = {}) {
     page: rawPage,
     pageSize,
     totalPages: total === 0 ? 0 : Math.ceil(total / pageSize),
-    // 回显生效的查询条件，前端可以据此确认「我的筛选被服务端接受了吗」。
+    // Echo back the effective query conditions, so the front end can confirm "were my filters accepted by the server".
     filters: { keyword, favoriteOnly, sortBy, order },
   };
 }
 
 /**
- * 删除指定 id 的历史记录。
- * 记录不存在时抛 404，而不是静默返回成功——否则前端删一个不存在的 id
- * 会以为删掉了，实际什么也没发生，属于「假成功」，是最难排查的一类问题。
+ * Delete the history record with the given id.
+ * When the record does not exist, throw 404 rather than silently returning success — otherwise the front end
+ * deleting a nonexistent id would believe it was deleted when nothing happened, a "fake success" that is one
+ * of the hardest classes of problem to troubleshoot.
  */
 export function removeHistory(rawId) {
   const id = parseHistoryId(rawId);
@@ -112,13 +114,13 @@ export function removeHistory(rawId) {
   return { id, deleted };
 }
 
-/** 清空全部历史。返回被删除的条数，便于前端提示「已清空 N 条」。 */
+/** Clear all history. Returns the number of deleted rows so the front end can say "cleared N records". */
 export function clearHistory() {
   const deleted = historyModel.deleteAllHistory();
   return { deleted };
 }
 
-/** 切换收藏状态，返回更新后的整条记录。 */
+/** Toggle the favorite state and return the whole updated record. */
 export function toggleFavorite(rawId, nextState) {
   const id = parseHistoryId(rawId);
   const existing = historyModel.findHistoryById(id);
@@ -130,13 +132,14 @@ export function toggleFavorite(rawId, nextState) {
     );
   }
 
-  // 未显式传入目标状态时按「取反」处理，方便前端只用一个按钮来回切。
+  // When no target state is passed explicitly, treat it as "negate", so the front end can toggle back and
+  // forth with a single button.
   const target = typeof nextState === 'boolean' ? nextState : !existing.isFavorite;
   historyModel.setFavorite(id, target);
   return historyModel.findHistoryById(id);
 }
 
-/** 汇总统计。 */
+/** Aggregate statistics. */
 export function getStatistics() {
   return historyModel.getStatistics();
 }

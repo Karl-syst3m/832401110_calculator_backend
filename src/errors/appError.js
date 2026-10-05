@@ -1,20 +1,20 @@
 /**
- * 接口层（HTTP）自身产生的错误。
+ * Errors produced by the interface layer (HTTP) itself.
  *
- * 与 CalculatorError 的分工：
- *   - CalculatorError：表达式本身有问题，属于「用户输入非法」，需要告诉用户哪里错了；
- *   - AppError：请求的资源不存在、分页参数非法、JSON 格式错误等，属于「调用方式有问题」。
+ * Division of labor with CalculatorError:
+ *   - CalculatorError: the expression itself is problematic, i.e. "the user's input is illegal", and the user must be told where it is wrong;
+ *   - AppError: the requested resource does not exist, the pagination parameters are illegal, the JSON is malformed and so on, i.e. "the way it was called is problematic".
  *
- * 这里带上 status，是因为这些错误天然就属于某个 HTTP 语义，
- * 而计算内核的错误不应该背负 HTTP 概念。
+ * The status is carried here because these errors inherently belong to some HTTP semantics, whereas errors
+ * from the calculation kernel should not bear HTTP concepts.
  */
 export class AppError extends Error {
   /**
-   * @param {string} code 稳定的错误码
-   * @param {string} message 面向接口调用者的英文说明
+   * @param {string} code stable error code
+   * @param {string} message English explanation aimed at the API caller
    * @param {object} [options]
-   * @param {number} [options.status] HTTP 状态码
-   * @param {object} [options.detail] 附加上下文
+   * @param {number} [options.status] HTTP status code
+   * @param {object} [options.detail] additional context
    */
   constructor(code, message, { status = 400, detail = {} } = {}) {
     super(message);
@@ -25,23 +25,23 @@ export class AppError extends Error {
   }
 }
 
-/** 接口层错误码，与计算内核的错误码分开维护，避免语义混淆。 */
+/** Interface-layer error codes, maintained separately from the calculation kernel's codes to avoid semantic confusion. */
 export const AppErrorCodes = Object.freeze({
-  /** 请求体不是合法 JSON */
+  /** The request body is not valid JSON */
   MALFORMED_JSON: 'MALFORMED_JSON',
-  /** 分页参数非法 */
+  /** The pagination parameters are illegal */
   INVALID_PAGINATION: 'INVALID_PAGINATION',
-  /** 历史记录 id 非法（不是正整数） */
+  /** The history id is illegal (not a positive integer) */
   INVALID_HISTORY_ID: 'INVALID_HISTORY_ID',
-  /** 指定 id 的历史记录不存在 */
+  /** No history record exists with the given id */
   HISTORY_NOT_FOUND: 'HISTORY_NOT_FOUND',
-  /** 请求的路径不存在 */
+  /** The requested path does not exist */
   ROUTE_NOT_FOUND: 'ROUTE_NOT_FOUND',
-  /** 进制换算参数非法 */
+  /** The base conversion parameters are illegal */
   INVALID_BASE_CONVERSION: 'INVALID_BASE_CONVERSION',
-  /** 单位换算参数非法 */
+  /** The unit conversion parameters are illegal */
   INVALID_UNIT_CONVERSION: 'INVALID_UNIT_CONVERSION',
-  /** 服务内部错误 */
+  /** Internal service error */
   INTERNAL_ERROR: 'INTERNAL_ERROR',
 });
 

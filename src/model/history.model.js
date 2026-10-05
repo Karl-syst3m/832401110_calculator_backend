@@ -1,22 +1,24 @@
 /**
- * 历史记录数据访问层（Model）
+ * History data access layer (Model)
  *
- * 这一层是唯一直接书写 SQL 的地方。上层 service / controller 只调用这里的函数，
- * 不接触任何 SQL 字符串。这样设计有三个好处：
- *   1. 换数据库（例如从 SQLite 迁到 MySQL）只需重写这一层；
- *   2. SQL 集中审查，是否存在拼接注入一目了然；
- *   3. 单元测试可以针对这一层单独验证增删改查。
+ * This layer is the only place where SQL is written directly. The service / controller layers above only
+ * call the functions here and never touch an SQL string. This design has three benefits:
+ *   1. switching databases (say from SQLite to MySQL) requires rewriting only this layer;
+ *   2. SQL is reviewed in one place, so whether concatenation injection exists is immediately obvious;
+ *   3. unit tests can verify the CRUD operations against this layer alone.
  *
- * 所有会拼接进 SQL 的「可变部分」（排序字段、排序方向）都经过白名单校验，
- * 值本身一律走参数绑定（? 占位符），不做字符串拼接。
+ * Every "variable part" that gets concatenated into the SQL (sort field, sort direction) passes whitelist
+ * validation, and values themselves always go through bound parameters (the ? placeholder) rather than
+ * string concatenation.
  */
 
 import { getDatabase } from '../db/connection.js';
 
 /**
- * 把数据库行（snake_case）转换成接口层的对象（camelCase）。
- * 这层映射看起来啰嗦，但它把「数据库列名」和「API 字段名」解耦了：
- * 将来改列名不会波及前端，前端也不会因为数据库风格而出现下划线字段。
+ * Convert a database row (snake_case) into an interface-layer object (camelCase).
+ * This mapping looks verbose, but it decouples "database column names" from "API field names":
+ * renaming a column later will not ripple into the front end, and the front end will not end up with
+ * underscore fields just because of the database style.
  */
 function mapRow(row) {
   if (row === undefined) return null;
@@ -32,15 +34,16 @@ function mapRow(row) {
 }
 
 /**
- * 转义 LIKE 通配符。
- * 如果不转义，用户搜索 "5%" 会被 SQL 当成「以 5 开头」的模糊匹配，
- * 搜 "_" 更是会匹配任意单字符，结果与用户预期完全不符。
+ * Escape LIKE wildcards.
+ * Without escaping, a user searching for "5%" would be treated by SQL as a fuzzy match "starts with 5",
+ * and searching "_" would match any single character, giving results entirely at odds with the user's
+ * expectation.
  */
 function escapeLikePattern(keyword) {
   return keyword.replace(/[\\%_]/g, (match) => `\\${match}`);
 }
 
-/** 排序字段白名单：把「前端可选的排序方式」映射到真实列名，杜绝 SQL 注入。 */
+/** Sort field whitelist: maps "the sort modes the front end may choose" to real column names, eliminating SQL injection. */
 const SORTABLE_COLUMNS = Object.freeze({
   createdAt: 'created_at',
   result: 'result',
@@ -48,8 +51,8 @@ const SORTABLE_COLUMNS = Object.freeze({
 });
 
 /**
- * 插入一条计算记录。
- * @returns {number} 新记录的 id
+ * Insert one calculation record.
+ * @returns {number} the id of the new record
  */
 export function insertHistory({ expression, normalizedExpression, result, resultText, createdAt }) {
   const statement = getDatabase().prepare(`
@@ -61,7 +64,7 @@ export function insertHistory({ expression, normalizedExpression, result, result
   return Number(info.lastInsertRowid);
 }
 
-/** 按 id 查询单条记录，不存在返回 null。 */
+/** Look up a single record by id; returns null when it does not exist. */
 export function findHistoryById(id) {
   const statement = getDatabase().prepare(
     'SELECT * FROM calculation_history WHERE id = ? LIMIT 1',
@@ -70,15 +73,15 @@ export function findHistoryById(id) {
 }
 
 /**
- * 分页查询历史记录。
+ * Paginated history query.
  *
  * @param {object} query
- * @param {number} query.page 页码，从 1 开始
- * @param {number} query.pageSize 每页条数
- * @param {string} [query.keyword] 关键词，匹配表达式或结果文本
- * @param {boolean} [query.favoriteOnly] 只看收藏
- * @param {'createdAt'|'result'|'id'} [query.sortBy] 排序字段
- * @param {'asc'|'desc'} [query.order] 排序方向
+ * @param {number} query.page page number, starting from 1
+ * @param {number} query.pageSize records per page
+ * @param {string} [query.keyword] keyword, matching the expression or the result text
+ * @param {boolean} [query.favoriteOnly] favorites only
+ * @param {'createdAt'|'result'|'id'} [query.sortBy] sort field
+ * @param {'asc'|'desc'} [query.order] sort direction
  * @returns {{items: Array<object>, total: number}}
  */
 export function findHistory({
@@ -103,10 +106,11 @@ export function findHistory({
   }
 
   const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-  // 用 Object.hasOwn 而不是直接取值后判断空：若 sortBy 传成 "constructor"，
-  // 直接取值会命中原型链上的 Object 构造函数，被当成合法列名拼进 SQL。
-  // 虽然 service 层已用 Set 白名单拦过一次，这里再做一层自己的防御，
-  // 保证 model 被单独调用时同样安全。
+  // Object.hasOwn is used rather than taking the value and then testing for emptiness: if sortBy were passed
+  // as "constructor", taking the value directly would hit the Object constructor on the prototype chain and
+  // concatenate it into the SQL as a legal column name.
+  // Although the service layer already blocks this once with a Set whitelist, a second layer of defense is
+  // placed here so that the model is equally safe when called on its own.
   const column = Object.hasOwn(SORTABLE_COLUMNS, sortBy)
     ? SORTABLE_COLUMNS[sortBy]
     : SORTABLE_COLUMNS.createdAt;
@@ -114,8 +118,9 @@ export function findHistory({
 
   const database = getDatabase();
 
-  // 总数与当页数据分成两条查询，而不是用 SQL_CALC_FOUND_ROWS 之类的技巧：
-  // SQLite 没有后者，而且分开写语义更直白，代价只是一次廉价的 COUNT。
+  // The total count and the current page's data are split into two queries, rather than using a trick such
+  // as SQL_CALC_FOUND_ROWS: SQLite does not have the latter, and writing them separately is more
+  // straightforward semantically, at the cost of only one cheap COUNT.
   const countRow = database
     .prepare(`SELECT COUNT(*) AS total FROM calculation_history ${whereClause}`)
     .get(...params);
@@ -129,16 +134,17 @@ export function findHistory({
       ORDER BY ${column} ${direction}, id ${direction}
       LIMIT ? OFFSET ?
     `)
-    // 次级排序键固定用 id：created_at 只精确到毫秒，同毫秒的多条记录若不定序，
-    // 翻页时可能出现同一条记录重复出现或被跳过。
+    // The secondary sort key is fixed to id: created_at is only precise to the millisecond, and if
+    // multiple records within the same millisecond are not ordered deterministically, paginating could
+    // show the same record twice or skip one.
     .all(...params, pageSize, offset);
 
   return { items: rows.map(mapRow), total };
 }
 
 /**
- * 删除指定 id 的记录。
- * @returns {number} 实际删除的行数（0 表示记录不存在）
+ * Delete the record with the given id.
+ * @returns {number} the number of rows actually deleted (0 means the record does not exist)
  */
 export function deleteHistoryById(id) {
   const statement = getDatabase().prepare('DELETE FROM calculation_history WHERE id = ?');
@@ -146,8 +152,8 @@ export function deleteHistoryById(id) {
 }
 
 /**
- * 清空全部历史。
- * @returns {number} 删除的行数
+ * Clear all history.
+ * @returns {number} the number of rows deleted
  */
 export function deleteAllHistory() {
   const statement = getDatabase().prepare('DELETE FROM calculation_history');
@@ -155,8 +161,8 @@ export function deleteAllHistory() {
 }
 
 /**
- * 设置收藏状态。
- * @returns {number} 影响的行数
+ * Set the favorite state.
+ * @returns {number} the number of affected rows
  */
 export function setFavorite(id, isFavorite) {
   const statement = getDatabase().prepare(
@@ -166,11 +172,13 @@ export function setFavorite(id, isFavorite) {
 }
 
 /**
- * 汇总统计。
+ * Aggregate statistics.
  *
- * 说明：created_at 以 UTC 存储，因此「今日计算次数」按 UTC 日界统计。
- * 这是一个有意识的取舍——按服务器本地时区统计会在夏令时切换日出现歧义，
- * 而明示 UTC 至少行为可预测。接口返回值里会带上 timezone 字段说明这一点。
+ * Note: created_at is stored in UTC, so "number of calculations today" is counted by the UTC day
+ * boundary.
+ * This is a conscious trade-off — counting by the server's local time zone would be ambiguous on a
+ * daylight-saving transition day, whereas stating UTC explicitly at least gives predictable behavior.
+ * The endpoint's return value carries a timezone field to make this clear.
  */
 export function getStatistics() {
   const database = getDatabase();

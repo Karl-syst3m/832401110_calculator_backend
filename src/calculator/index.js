@@ -1,12 +1,14 @@
 /**
- * 计算模块的统一入口（门面 / Facade）
+ * Unified entry point of the calculation module (Facade)
  *
- * 对外只暴露一个 calculate 函数，把「归一化 -> 词法 -> 语法 -> 求值 -> 规范化」
- * 这条流水线封装起来。上层（service 层）不需要知道内部有几个阶段。
+ * It exposes a single calculate function to the outside and wraps up the pipeline
+ * "normalization -> lexical analysis -> parsing -> evaluation -> normalization".
+ * The layer above (the service layer) does not need to know how many stages there are inside.
  *
- * 之所以把入口单独放一个文件，而不是让 service 直接 import parser 和 evaluator：
- * 这样将来若要在流水线中间插入新阶段（比如度/弧度模式、变量表），
- * 只需要改这一个文件，调用方不受影响。
+ * The reason the entry point lives in its own file, rather than letting the service import the
+ * parser and evaluator directly: if a new stage ever needs to be inserted in the middle of the
+ * pipeline (say degree/radian mode, or a variable table), only this one file changes and callers
+ * are unaffected.
  */
 
 import { CalculatorError, ErrorCodes } from './errors.js';
@@ -15,23 +17,23 @@ import { parse } from './parser.js';
 import { evaluate } from './evaluator.js';
 import { normalizeNumber, formatNumber } from './format.js';
 
-/** 表达式长度的默认上限。 */
+/** Default upper limit on expression length. */
 export const DEFAULT_MAX_EXPRESSION_LENGTH = 200;
 
 /**
- * 计算一个数学表达式。
+ * Evaluate a mathematical expression.
  *
- * @param {unknown} rawExpression 前端传来的原始表达式
+ * @param {unknown} rawExpression the raw expression sent by the front end
  * @param {object} [options]
- * @param {number} [options.maxLength] 长度上限
+ * @param {number} [options.maxLength] length limit
  * @returns {{expression: string, normalizedExpression: string, value: number, valueText: string, ast: object}}
  * @throws {CalculatorError}
  */
 export function calculate(rawExpression, options = {}) {
   const maxLength = options.maxLength ?? DEFAULT_MAX_EXPRESSION_LENGTH;
 
-  // ---- 1. 输入类型与长度校验 ----
-  // 放在最前面，因为后面的阶段都假设拿到的是一个字符串。
+  // ---- 1. Input type and length validation ----
+  // Placed first, because the later stages all assume they receive a string.
   if (typeof rawExpression !== 'string') {
     throw new CalculatorError(
       ErrorCodes.EXPRESSION_REQUIRED,
@@ -57,19 +59,19 @@ export function calculate(rawExpression, options = {}) {
     );
   }
 
-  // ---- 2. 归一化：全角符号、× ÷ 等统一为 ASCII ----
+  // ---- 2. Normalization: full-width symbols, × ÷ and so on are unified to ASCII ----
   const normalized = normalizeExpression(trimmed);
 
-  // ---- 3. 语法分析 ----
+  // ---- 3. Parsing ----
   const ast = parse(normalized);
 
-  // ---- 4. 求值 ----
+  // ---- 4. Evaluation ----
   const raw = evaluate(ast);
 
-  // ---- 5. 结果健全性检查 ----
-  // 这两种情况必须区分开，因为它们对用户意味着完全不同的东西：
-  //   NaN    -> 这个式子根本没有实数解，例如 (-8)^(1/3)
-  //   ±Inf  -> 有解但超出了双精度能表示的范围，例如 1e308*10
+  // ---- 5. Result sanity check ----
+  // These two cases must be distinguished, because they mean completely different things to the user:
+  //   NaN    -> the expression simply has no real solution, for example (-8)^(1/3)
+  //   ±Inf   -> there is a solution but it exceeds what a double can represent, for example 1e308*10
   if (Number.isNaN(raw)) {
     throw new CalculatorError(
       ErrorCodes.DOMAIN_ERROR,

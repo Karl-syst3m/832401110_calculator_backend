@@ -1,60 +1,62 @@
 # =============================================================================
-# nginx 配置示例 —— 无域名场景（用公网 IP + 端口访问）
+# nginx configuration example — no-domain scenario (accessed by public IP + port)
 #
-# 适用条件：
-#   - 没有可用的域名，只能用公网 IP 访问
-#   - 服务器上 80 / 443 端口已被其它站点占用（不要动它们）
+# Applies when:
+#   - no domain name is available and access can only be by public IP
+#   - ports 80 / 443 on the server are already taken by other sites (leave them alone)
 #
-# 做法：让 nginx 额外监听一个高位端口（本例为 8000），
-#       由它同时提供前端静态文件与 /api 反向代理。
-#       前端与接口同源，因此不需要配置 CORS。
+# Approach: have nginx listen on an additional high port (8000 in this example) and let it
+#           serve both the frontend static files and the /api reverse proxy.
+#           Frontend and API share an origin, so no CORS configuration is needed.
 #
-# 部署前需要替换的占位符：
-#   <FRONTEND_ROOT>   前端静态文件目录，例如 /var/www/calculator
+# Placeholders to replace before deployment:
+#   <FRONTEND_ROOT>   frontend static file directory, for example /var/www/calculator
 #
-# 安装位置建议：/etc/nginx/sites-available/calculator
-# 启用：sudo ln -s /etc/nginx/sites-available/calculator /etc/nginx/sites-enabled/
+# Suggested install location: /etc/nginx/sites-available/calculator
+# Enable: sudo ln -s /etc/nginx/sites-available/calculator /etc/nginx/sites-enabled/
 #       sudo nginx -t && sudo systemctl reload nginx
 #
-# 除 nginx 配置外，还需要放行防火墙与该端口的安全组规则，
-# 详见 deploy/DEPLOY.md 的「无域名部署」一节的检查清单。
+# Besides the nginx configuration, the firewall and the security group rules for this port
+# must also be opened; see the checklist in the "Deployment Without a Domain Name" section
+# of deploy/DEPLOY.md.
 #
-# 关于 HTTPS：Let's Encrypt 不为纯 IP 签发证书，因此本方案只能使用 HTTP。
-# 本项目不传输任何凭据（计算表达式与历史记录都不敏感），HTTP 可以接受；
-# 但作业博客中应如实说明这一点。
+# About HTTPS: Let's Encrypt does not issue certificates for a bare IP, so this approach can
+# only use HTTP. This project transmits no credentials at all (calculation expressions and
+# history records are not sensitive), so HTTP is acceptable; but the assignment blog should
+# state this honestly.
 # =============================================================================
 
 upstream calculator_backend {
-    # 后端只监听回环地址，不直接暴露公网，所有流量经 nginx 转发
+    # The backend listens only on the loopback address and is never exposed publicly; all traffic is forwarded by nginx
     server 127.0.0.1:5000;
     keepalive 16;
 }
 
 server {
-    # 选择一个未被占用的高位端口。
-    # 可用 `ss -ltn | grep :8000` 确认是否空闲。
-    # 8080 / 8081 / 9000 也是常见备选。
+    # Choose a high port that is not already in use.
+    # Check whether it is free with `ss -ltn | grep :8000`.
+    # 8080 / 8081 / 9000 are also common alternatives.
     listen 8000;
     listen [::]:8000;
 
-    # 用 IP 访问时，请求的 Host 头就是那个 IP 或为空，
-    # 这里用 `_` 表示「该端口上的默认 server」，无需匹配具体域名。
+    # When accessing by IP, the request's Host header is that IP or empty; `_` here means
+    # "the default server on this port", so no specific domain has to be matched.
     server_name _;
 
-    # ---- 基础安全响应头 ----
-    # 注意：通过 HTTP 访问时 HSTS 无意义且有害（会强制浏览器以后只用 HTTPS），
-    # 因此这里刻意不设置 Strict-Transport-Security。
+    # ---- Basic security response headers ----
+    # Note: over HTTP, HSTS is meaningless and harmful (it forces the browser to use HTTPS
+    # from then on), so Strict-Transport-Security is deliberately not set here.
     add_header X-Content-Type-Options "nosniff" always;
     add_header X-Frame-Options "SAMEORIGIN" always;
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
     add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'" always;
 
-    # ---- 压缩 ----
+    # ---- Compression ----
     gzip on;
     gzip_types text/plain text/css application/javascript application/json image/svg+xml;
     gzip_min_length 1024;
 
-    # ---- 前端静态文件 ----
+    # ---- Frontend static files ----
     root <FRONTEND_ROOT>;
     index index.html;
 
@@ -73,7 +75,7 @@ server {
         try_files $uri =404;
     }
 
-    # ---- 后端接口反向代理 ----
+    # ---- Reverse proxy for the backend API ----
     location /api/ {
         proxy_pass http://calculator_backend;
         proxy_http_version 1.1;
@@ -92,15 +94,15 @@ server {
         add_header Cache-Control "no-store";
     }
 
-    # ---- 便于外部探活的健康检查 ----
+    # ---- Health check, convenient for external liveness probing ----
     location = /healthz {
         proxy_pass http://calculator_backend/api/health;
         access_log off;
     }
 
-    # ---- 禁止访问隐藏文件与源码/数据文件 ----
-    # README.md 与 codestyle.md 虽然放在仓库里，但不应该出现在 Web 目录；
-    # 这条规则是第二道防线。
+    # ---- Deny access to hidden files and to source/data files ----
+    # README.md and codestyle.md belong in the repository but should not appear in the web
+    # directory; this rule is the second line of defense.
     location ~ /\. {
         deny all;
         return 404;

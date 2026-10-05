@@ -1,30 +1,34 @@
 /**
- * 数据库表结构
+ * Database table schema
  *
- * 表设计说明（对应作业要求的 calculation_history: id / expression / result / created_at）：
+ * Table design notes (corresponding to the assignment's required calculation_history: id / expression / result / created_at):
  *
- * | 字段                  | 为什么需要它                                                     |
- * |-----------------------|------------------------------------------------------------------|
- * | id                    | 主键，作业要求「按 id 删除指定记录」，前端也用它做列表 key          |
- * | expression            | 用户原始输入，保留原样以便回显「我当时算的是什么」                  |
- * | normalized_expression | 归一化后的表达式（× 变 * 等），排查问题时能看出实际参与计算的是什么 |
- * | result                | 数值型结果，供统计（平均值等）使用                                |
- * | result_text           | 文本型结果，专门解决大数精度问题，理由见下                        |
- * | is_favorite           | 收藏标记，扩展功能                                                |
- * | created_at            | 计算时间，作业要求字段，同时是默认排序键                           |
+ * | Field                 | Why it is needed                                                             |
+ * |-----------------------|------------------------------------------------------------------------------|
+ * | id                    | Primary key; the assignment requires "delete the specified record by id", and the front end also uses it as the list key |
+ * | expression            | The user's original input, kept as-is so we can echo back "what I was calculating at the time" |
+ * | normalized_expression | The normalized expression (× turned into * and so on), so that when troubleshooting one can see what actually took part in the computation |
+ * | result                | The numeric result, used by statistics (averages and so on)                   |
+ * | result_text           | The textual result, specifically solving the large-number precision problem; the reasoning is below |
+ * | is_favorite           | Favorite flag, an extension feature                                           |
+ * | created_at            | Computation time, a field required by the assignment, and also the default sort key |
  *
- * 为什么 result 和 result_text 要同时存？
- * SQLite 的 REAL 是 8 字节双精度浮点，本身能存下 2^53 以上的整数，但一旦读回 JavaScript
- * 就会经过一次 double 转换。对于 1e18 这种量级，数值本身已经超出安全整数范围，
- * 直接显示 REAL 会得到一个尾数被抹平的数字（如 1152921504610000000）。
- * 而 result_text 是我们用 formatNumber 精心格式化后的字符串，与计算当刻的展示完全一致。
- * 因此约定：**展示一律用 result_text，统计计算一律用 result**，两者各司其职。
+ * Why store both result and result_text?
+ * SQLite's REAL is an 8-byte double-precision float; it can itself hold integers above 2^53, but as soon
+ * as it is read back into JavaScript it goes through a double conversion. At a magnitude like 1e18 the
+ * value is already beyond the safe integer range, so displaying REAL directly yields a number whose
+ * mantissa has been flattened (such as 1152921504610000000).
+ * result_text, by contrast, is the string we carefully formatted with formatNumber, identical to what was
+ * displayed at the moment of computation.
+ * Hence the convention: **display always uses result_text, statistical computation always uses result**,
+ * each doing its own job.
  *
- * 索引说明：
- *   - created_at DESC：历史列表默认按时间倒序分页，这是最高频的查询路径；
- *   - expression：关键词搜索与「最常用表达式」统计都会用到；
- *   - is_favorite：收藏筛选。
- * 索引不是越多越好，写入时要同步维护，这里只建了确实会被查询用到的三列。
+ * Index notes:
+ *   - created_at DESC: the history list paginates by time descending by default, which is the most frequent query path;
+ *   - expression: keyword search and the "most frequently used expression" statistic both use it;
+ *   - is_favorite: favorite filtering.
+ * More indexes are not better; each must be maintained on write as well, so only the three columns that
+ * are genuinely used by queries are created here.
  */
 
 export const SCHEMA_SQL = `
@@ -49,8 +53,8 @@ CREATE INDEX IF NOT EXISTS idx_history_favorite
 `;
 
 /**
- * 建表。使用 IF NOT EXISTS，因此重复执行是幂等的，
- * 服务每次启动都会调用一次，无需单独的「初始化数据库」步骤。
+ * Create the tables. It uses IF NOT EXISTS, so repeated execution is idempotent;
+ * the service calls it once on every startup, with no separate "initialize the database" step.
  * @param {import('node:sqlite').DatabaseSync} db
  */
 export function applySchema(db) {

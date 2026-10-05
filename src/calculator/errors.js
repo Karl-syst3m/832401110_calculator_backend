@@ -1,17 +1,19 @@
 /**
- * 计算内核的领域错误。
+ * Domain errors of the calculation kernel.
  *
- * 设计说明（这一层刻意「不知道 HTTP」）：
- * 计算内核只负责回答「这个表达式哪里不对」，用 code 表达错误的种类。
- * 至于每种错误该回 400 还是 404，是接口层的决策，放在 errorHandler 中间件里映射。
- * 这样做的收益是：计算模块可以脱离 HTTP 单独测试，也不会因为将来换协议
- * （比如换成 gRPC 或 CLI）而需要改动。
+ * Design notes (this layer deliberately "knows nothing about HTTP"):
+ * The calculation kernel is only responsible for answering "what is wrong with this expression",
+ * and it expresses the kind of error through code.
+ * Whether a given kind of error should return 400 or 404 is a decision of the interface layer,
+ * mapped in the errorHandler middleware.
+ * The payoff is that the calculation module can be tested on its own without HTTP, and it will
+ * not need changes if the protocol is swapped in the future (say to gRPC or a CLI).
  */
 export class CalculatorError extends Error {
   /**
-   * @param {string} code 稳定的错误码，前端据此做文案本地化
-   * @param {string} message 面向接口调用者的英文说明
-   * @param {object} [detail] 附加上下文，例如出错位置、函数名
+   * @param {string} code stable error code; the front end uses it to localize the copy
+   * @param {string} message English explanation aimed at the API caller
+   * @param {object} [detail] additional context, such as the error position or the function name
    */
   constructor(code, message, detail = {}) {
     super(message);
@@ -22,34 +24,35 @@ export class CalculatorError extends Error {
 }
 
 /**
- * 错误码常量表。
- * 用常量而不是裸字符串，一方面避免拼写错误，另一方面让「系统支持哪些错误」
- * 一眼可见，前端也可以对照这张表实现中文提示。
+ * Table of error code constants.
+ * Constants instead of bare strings avoid typos on the one hand, and on the other make
+ * "which errors does the system support" visible at a glance, so the front end can implement
+ * localized messages against this table.
  */
 export const ErrorCodes = Object.freeze({
-  /** 请求里没有 expression 字段，或者它是空字符串 */
+  /** The request has no expression field, or it is an empty string */
   EXPRESSION_REQUIRED: 'EXPRESSION_REQUIRED',
-  /** 表达式长度超过上限 */
+  /** The expression is longer than the limit */
   EXPRESSION_TOO_LONG: 'EXPRESSION_TOO_LONG',
-  /** 括号嵌套过深，防止恶意构造把调用栈打爆 */
+  /** Parentheses are nested too deeply, preventing a maliciously crafted input from blowing up the call stack */
   EXPRESSION_TOO_DEEP: 'EXPRESSION_TOO_DEEP',
-  /** 出现了不属于表达式字符集的字符 */
+  /** A character that does not belong to the expression character set appeared */
   ILLEGAL_CHARACTER: 'ILLEGAL_CHARACTER',
-  /** 语法位置上出现了一个不该出现的记号 */
+  /** A token appeared at a syntactic position where it does not belong */
   UNEXPECTED_TOKEN: 'UNEXPECTED_TOKEN',
-  /** 表达式在需要操作数的位置结束了，例如 "1+" */
+  /** The expression ended where an operand was required, for example "1+" */
   UNEXPECTED_END: 'UNEXPECTED_END',
-  /** 括号不配对 */
+  /** Parentheses are not balanced */
   UNBALANCED_PARENTHESIS: 'UNBALANCED_PARENTHESIS',
-  /** 未知的函数名或常量名 */
+  /** Unknown function name or constant name */
   UNKNOWN_IDENTIFIER: 'UNKNOWN_IDENTIFIER',
-  /** 函数参数个数不对 */
+  /** Wrong number of function arguments */
   BAD_ARGUMENT_COUNT: 'BAD_ARGUMENT_COUNT',
-  /** 除以零 */
+  /** Division by zero */
   DIVISION_BY_ZERO: 'DIVISION_BY_ZERO',
-  /** 数学定义域错误，例如 sqrt(-1)、ln(0) */
+  /** Mathematical domain error, for example sqrt(-1) or ln(0) */
   DOMAIN_ERROR: 'DOMAIN_ERROR',
-  /** 结果超出双精度可表示范围，或不是实数 */
+  /** The result is outside the range representable by a double, or it is not a real number */
   RESULT_NOT_FINITE: 'RESULT_NOT_FINITE',
 });
 

@@ -1,32 +1,34 @@
 /**
- * 进制换算与单位换算服务。
+ * Base conversion and unit conversion service.
  *
- * 一个重要的架构决策：**这两种换算都放在后端**。
+ * An important architectural decision: **both conversions live in the backend**.
  *
- * 原因有两层：
- *   1. 作业明确要求「核心计算必须在后端完成，前端不得直接算出结果」。
- *      进制换算本身就是一次数值计算（1234 -> 4D2），如果放在前端做，
- *      就成了「前端算完只让后端存一下」的变体，与要求相抵触。
- *   2. 把换算规则收敛到后端一张表（data/units.js），前端只负责渲染下拉框，
- *      改动换算表不需要发版前端，也不会出现前后端规则不一致。
+ * There are two layers to the reason:
+ *   1. The assignment explicitly requires "core computation must be completed in the backend; the front end
+ *      must not compute the result directly". Base conversion is itself a numeric computation (1234 -> 4D2),
+ *      so doing it in the front end would become a variant of "the front end computes and just lets the
+ *      backend store it", which conflicts with the requirement.
+ *   2. Funneling the conversion rules into one table in the backend (data/units.js) leaves the front end
+ *      responsible only for rendering the dropdowns; changing the conversion table requires no front-end
+ *      release, and the front end and backend can never disagree about the rules.
  *
- * 代价是每次换算多一次网络往返。对一个交互频率很低的功能来说完全可以接受，
- * 而「规则单一事实来源」带来的收益更大。
+ * The cost is one extra network round trip per conversion. For a feature used at a very low frequency that is
+ * entirely acceptable, and the benefit of a "single source of truth for the rules" is greater.
  */
 
 import { AppError, AppErrorCodes } from '../errors/appError.js';
 import { UNIT_CATEGORIES } from '../data/units.js';
 import { formatNumber } from '../calculator/format.js';
 
-/** 允许的进制范围。2 到 36 是「用 0-9 加 a-z 表示」所支持的上限。 */
+/** Allowed base range. 2 to 36 is the upper limit supported by "using 0-9 plus a-z". */
 const MIN_BASE = 2;
 const MAX_BASE = 36;
 
-/** 各进制的合法数字字符。 */
+/** The valid digit characters of each base. */
 const DIGITS = '0123456789abcdefghijklmnopqrstuvwxyz';
 
 /**
- * 校验进制取值。
+ * Validate a base value.
  */
 function validateBase(value, fieldName) {
   const base = Number(value);
@@ -41,15 +43,17 @@ function validateBase(value, fieldName) {
 }
 
 /**
- * 把任意进制的字符串转成 BigInt 整数部分 + 小数部分数值。
+ * Convert a string in any base into a BigInt integer part plus a numeric fraction part.
  *
- * 为什么整数部分用 BigInt？
- * JavaScript 的 Number 只能精确表示 2^53 以内的整数。十六进制的 7 位数字
- * （如 FFFFFFF）就已是 268435455，尚在安全范围内；但用户输入长一点就会越界，
- * 出现「转换结果末位是 0」的错误。BigInt 是任意精度，从根上避免这个问题。
+ * Why use BigInt for the integer part?
+ * JavaScript's Number can only represent integers up to 2^53 exactly. Seven hexadecimal digits
+ * (such as FFFFFFF) already equal 268435455, still within the safe range; but a slightly longer user input
+ * goes out of range and produces the error "the last digit of the conversion result is 0". BigInt has
+ * arbitrary precision, eliminating the problem at the root.
  *
- * 小数部分仍用 Number 处理：小数换算本来就是近似值（如 0.1 在二进制里是无限循环），
- * 用有限精度表示是行业通行做法，刻意保留到 12 位有效数字。
+ * The fraction part is still handled with Number: fractional conversion is approximate by nature (0.1 is an
+ * infinite repeating fraction in binary), and representing it with finite precision is standard industry
+ * practice; it is deliberately kept to 12 significant digits.
  */
 function parseInBase(rawValue, base) {
   const text = rawValue.trim().toLowerCase();
@@ -71,7 +75,7 @@ function parseInBase(rawValue, base) {
     body = body.slice(1);
   }
 
-  // 归一化全角小数点，方便用户从别处粘贴。
+  // Normalize full-width decimal points, so users can paste from elsewhere.
   body = body.replace('。', '.').replace('．', '.');
 
   const [integerPart = '', fractionPart = ''] = body.split('.');
@@ -99,14 +103,14 @@ function parseInBase(rawValue, base) {
   checkDigits(integerPart, 'integer');
   checkDigits(fractionPart, 'fraction');
 
-  // 整数部分：逐位累加，BigInt 保证任意长度都精确。
+  // Integer part: accumulate digit by digit; BigInt guarantees exactness at any length.
   let integerValue = 0n;
   const bigBase = BigInt(base);
   for (const char of integerPart) {
     integerValue = integerValue * bigBase + BigInt(DIGITS.indexOf(char));
   }
 
-  // 小数部分：按位权折算成 Number。
+  // Fraction part: convert to Number according to positional weight.
   let fractionValue = 0;
   for (let i = 0; i < fractionPart.length; i += 1) {
     fractionValue += DIGITS.indexOf(fractionPart[i]) / base ** (i + 1);
@@ -115,7 +119,7 @@ function parseInBase(rawValue, base) {
   return { negative, integerValue, fractionValue, hasFraction: fractionPart !== '' };
 }
 
-/** 把整数部分按目标进制输出为字符串。 */
+/** Output the integer part as a string in the target base. */
 function bigIntToString(value, base) {
   if (value === 0n) return '0';
   let result = '';
@@ -130,17 +134,17 @@ function bigIntToString(value, base) {
 }
 
 /**
- * 小数部分转目标进制：乘基取整法。
+ * Convert the fraction part to the target base: the multiply-by-base-and-take-the-integer method.
  *
- * 以 0.625 转二进制为例：
- *   0.625*2 = 1.25 -> 取整 1，余 0.25
- *   0.25*2  = 0.5  -> 取整 0，余 0.5
- *   0.5*2   = 1.0  -> 取整 1，余 0
- * 得到 .101，验证：1/2 + 0/4 + 1/8 = 0.625 ✓
+ * Taking 0.625 to binary as an example:
+ *   0.625*2 = 1.25 -> take integer 1, remainder 0.25
+ *   0.25*2  = 0.5  -> take integer 0, remainder 0.5
+ *   0.5*2   = 1.0  -> take integer 1, remainder 0
+ * This gives .101; verification: 1/2 + 0/4 + 1/8 = 0.625 ✓
  *
- * @param {number} fraction 0 到 1 之间的小数
- * @param {number} base 目标进制
- * @param {number} maxDigits 最多输出的位数，防止无限循环（如 0.1 转二进制）
+ * @param {number} fraction a fraction between 0 and 1
+ * @param {number} base the target base
+ * @param {number} maxDigits the maximum number of digits to output, preventing an infinite loop (such as 0.1 to binary)
  */
 function fractionToString(fraction, base, maxDigits = 16) {
   let result = '';
@@ -150,20 +154,20 @@ function fractionToString(fraction, base, maxDigits = 16) {
     const digit = Math.floor(current);
     result += DIGITS[digit];
     current -= digit;
-    // 双精度误差会让 current 变成一个极小的非零值，产生无意义的尾随位，
-    // 这里用 1e-12 作为「已经归零」的判定阈值。
+    // Double-precision error turns current into an extremely small nonzero value, producing meaningless
+    // trailing digits; 1e-12 is used here as the threshold for "already zero".
     if (current < 1e-12) break;
   }
   return result;
 }
 
 /**
- * 进制换算。
+ * Base conversion.
  *
  * @param {object} input
- * @param {string} input.value 待换算的数值字符串
- * @param {number} input.fromBase 源进制
- * @param {number} input.toBase 目标进制
+ * @param {string} input.value the numeric string to convert
+ * @param {number} input.fromBase the source base
+ * @param {number} input.toBase the target base
  */
 export function convertBase({ value, fromBase, toBase }) {
   if (typeof value !== 'string' && typeof value !== 'number') {
@@ -195,7 +199,7 @@ export function convertBase({ value, fromBase, toBase }) {
     fromBase: sourceBase,
     toBase: targetBase,
     output,
-    // 同时给出十进制数值，方便用户核对与继续计算。
+    // The decimal value is also given, so the user can check it and keep calculating.
     decimalValue: formatNumber(
       (parsed.negative ? -1 : 1) * (Number(parsed.integerValue) + parsed.fractionValue),
     ),
@@ -203,16 +207,17 @@ export function convertBase({ value, fromBase, toBase }) {
 }
 
 /**
- * 单位换算。
+ * Unit conversion.
  *
  * @param {object} input
- * @param {string} input.category 类别，如 length / temperature
- * @param {string} input.from 源单位
- * @param {string} input.to 目标单位
- * @param {number} input.value 待换算的数值
+ * @param {string} input.category the category, such as length / temperature
+ * @param {string} input.from the source unit
+ * @param {string} input.to the target unit
+ * @param {number} input.value the value to convert
  */
 export function convertUnit({ category, from, to, value }) {
-  // 同 evaluator 里的处理：查表前必须确认键是表自己的，避免命中原型链属性。
+  // Same handling as in the evaluator: before looking up a table, confirm the key belongs to the table
+  // itself, avoiding hits on prototype chain properties.
   if (!Object.hasOwn(UNIT_CATEGORIES, category)) {
     throw new AppError(
       AppErrorCodes.INVALID_UNIT_CONVERSION,
@@ -245,7 +250,7 @@ export function convertUnit({ category, from, to, value }) {
 
   let result;
   if (spec.kind === 'affine') {
-    // 温度：先换到基准单位（摄氏度），再从基准换出去。
+    // Temperature: convert to the base unit (Celsius) first, then out of the base.
     result = toUnit.fromBase(fromUnit.toBase(numericValue));
   } else {
     result = (numericValue * fromUnit.factor) / toUnit.factor;
@@ -261,7 +266,7 @@ export function convertUnit({ category, from, to, value }) {
   };
 }
 
-/** 返回全部换算类别与单位，供前端渲染下拉框。 */
+/** Return every conversion category and unit, for the front end to render the dropdowns. */
 export function listUnits() {
   const categories = Object.entries(UNIT_CATEGORIES).map(([key, spec]) => ({
     key,

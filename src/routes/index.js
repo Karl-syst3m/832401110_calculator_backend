@@ -1,24 +1,25 @@
 /**
- * 路由表。
+ * Route table.
  *
- * 所有接口统一挂在 /api 前缀下（在 app.js 里挂载），这样 nginx 只需要
- * 一条 location /api/ 规则就能把接口请求转发给后端，其余请求走静态文件。
+ * Every endpoint is mounted uniformly under the /api prefix (mounted in app.js), so nginx needs only one
+ * location /api/ rule to forward API requests to the backend, while all other requests go to static files.
  *
- * 接口清单：
- *   GET    /api/health                 健康检查
- *   POST   /api/calculate              计算表达式并写入历史
- *   GET    /api/history                分页查询历史（支持 keyword / favoriteOnly / sortBy / order）
- *   GET    /api/history/stats          汇总统计
- *   DELETE /api/history/:id            删除指定历史记录
- *   DELETE /api/history                清空全部历史
- *   PATCH  /api/history/:id/favorite   切换收藏
- *   GET    /api/convert/units          查询支持的单位类别
- *   POST   /api/convert/base           进制换算
- *   POST   /api/convert/unit           单位换算
+ * Endpoint list:
+ *   GET    /api/health                 health check
+ *   POST   /api/calculate              evaluate an expression and write it to history
+ *   GET    /api/history                paginated history query (supports keyword / favoriteOnly / sortBy / order)
+ *   GET    /api/history/stats          aggregate statistics
+ *   DELETE /api/history/:id            delete the specified history record
+ *   DELETE /api/history                clear all history
+ *   PATCH  /api/history/:id/favorite   toggle favorite
+ *   GET    /api/convert/units          query the supported unit categories
+ *   POST   /api/convert/base           base conversion
+ *   POST   /api/convert/unit           unit conversion
  *
- * 注册顺序注意：/history/stats 必须写在 /history/:id 这类带参数的路由之前，
- * 否则 "stats" 会被当作 :id 的值匹配进去。本文件里没有 GET /history/:id，
- * 因此当前不受影响，但保持「静态路径优先」的顺序习惯可以避免将来踩坑。
+ * Registration order note: /history/stats must be written before parameterized routes such as
+ * /history/:id, otherwise "stats" would be matched as the value of :id. This file has no GET /history/:id,
+ * so it is currently unaffected, but keeping the "static paths first" ordering habit avoids tripping over
+ * this in the future.
  */
 
 import { Router } from 'express';
@@ -29,20 +30,20 @@ import * as healthController from '../controller/health.controller.js';
 
 export const router = Router();
 
-// ---- 基础设施 ----
+// ---- Infrastructure ----
 router.get('/health', healthController.health);
 
-// ---- 核心：计算 ----
+// ---- Core: calculation ----
 router.post('/calculate', calculatorController.calculate);
 
-// ---- 历史记录 ----
+// ---- History ----
 router.get('/history/stats', historyController.statistics);
 router.get('/history', historyController.list);
 router.delete('/history', historyController.clearAll);
 router.patch('/history/:id/favorite', historyController.toggleFavorite);
 router.delete('/history/:id', historyController.remove);
 
-// ---- 扩展：换算 ----
+// ---- Extension: conversion ----
 router.get('/convert/units', conversionController.listUnits);
 router.post('/convert/base', conversionController.convertBase);
 router.post('/convert/unit', conversionController.convertUnit);

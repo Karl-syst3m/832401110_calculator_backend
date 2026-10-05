@@ -1,17 +1,18 @@
 /**
- * 接口集成测试
+ * API integration tests
  *
- * 这一组测试在真实的 HTTP 服务器上跑，用真实的 HTTP 请求打接口，
- * 数据库用内存模式（:memory:）以避免污染开发数据并保证每个测试文件互相隔离。
+ * This group of tests runs against a real HTTP server, hitting the endpoints with real HTTP requests, and
+ * uses in-memory mode (:memory:) for the database to avoid polluting development data and to guarantee that
+ * each test file is isolated from the others.
  *
- * 覆盖重点：
- *   1. 四个必需功能的完整链路（计算 / 复合表达式 / 历史 / 删除）；
- *   2. 历史记录确实落在数据库里（不是进程内缓存）——通过「重新查询」验证；
- *   3. 状态码与错误码是否符合约定；
- *   4. 参数校验能否挡住畸形输入。
+ * Coverage focus:
+ *   1. the full path of the four required features (calculation / compound expressions / history / deletion);
+ *   2. history records really land in the database (not an in-process cache) — verified by "querying again";
+ *   3. whether status codes and error codes match the conventions;
+ *   4. whether parameter validation blocks malformed input.
  *
- * 注意：环境变量必须在 import 业务模块之前设置，
- * 因为 config 模块在首次导入时就会读取 process.env。
+ * Note: environment variables must be set before importing the business modules, because the config module
+ * reads process.env the first time it is imported.
  */
 
 process.env.NODE_ENV = 'test';
@@ -29,7 +30,7 @@ const { applySchema } = await import('../src/db/schema.js');
 let server;
 let baseUrl;
 
-/** 发一个 JSON 请求并解析响应。 */
+/** Send a JSON request and parse the response. */
 async function api(method, path, body) {
   const options = { method, headers: {} };
   if (body !== undefined) {
@@ -49,7 +50,7 @@ async function api(method, path, body) {
   return { status: response.status, body: payload };
 }
 
-/** 清空历史，让每个测试从已知状态开始。 */
+/** Clear history so each test starts from a known state. */
 async function resetHistory() {
   await api('DELETE', '/api/history');
 }
@@ -69,8 +70,8 @@ after(async () => {
   closeDatabase();
 });
 
-describe('GET /api/health —— 健康检查', () => {
-  test('服务与数据库均正常时返回 200', async () => {
+describe('GET /api/health — health check', () => {
+  test('returns 200 when the service and database are both healthy', async () => {
     const { status, body } = await api('GET', '/api/health');
     assert.equal(status, 200);
     assert.equal(body.success, true);
@@ -80,19 +81,19 @@ describe('GET /api/health —— 健康检查', () => {
   });
 });
 
-describe('POST /api/calculate —— 功能一：基础计算', () => {
-  test('加法返回结果，且结果由后端算出', async () => {
+describe('POST /api/calculate — Feature 1: basic calculation', () => {
+  test('addition returns a result, and the result is computed by the backend', async () => {
     const { status, body } = await api('POST', '/api/calculate', { expression: '12+8' });
     assert.equal(status, 201);
     assert.equal(body.success, true);
     assert.equal(body.expression, '12+8');
     assert.equal(body.result, 20);
     assert.equal(body.resultText, '20');
-    // 返回了 id 说明记录已经入库，这是后端起作用的直接证据
+    // An id was returned, which means the record has been persisted — direct evidence that the backend is doing the work
     assert.ok(Number.isInteger(body.id) && body.id > 0);
   });
 
-  test('四种基本运算都能正确计算', async () => {
+  test('all four basic operations compute correctly', async () => {
     const cases = [
       ['12+8', 20],
       ['12-8', 4],
@@ -101,45 +102,45 @@ describe('POST /api/calculate —— 功能一：基础计算', () => {
     ];
     for (const [expression, expected] of cases) {
       const { status, body } = await api('POST', '/api/calculate', { expression });
-      assert.equal(status, 201, `表达式 ${expression} 应当成功`);
-      assert.equal(body.result, expected, `表达式 ${expression} 结果错误`);
+      assert.equal(status, 201, `Expression ${expression} should succeed`);
+      assert.equal(body.result, expected, `Expression ${expression} produced a wrong result`);
     }
   });
 
-  test('小数计算', async () => {
+  test('decimal calculation', async () => {
     const { body } = await api('POST', '/api/calculate', { expression: '1.5*2.4' });
     assert.equal(body.resultText, '3.6');
   });
 });
 
-describe('POST /api/calculate —— 功能二：复合表达式', () => {
-  test('运算符优先级', async () => {
+describe('POST /api/calculate — Feature 2: compound expressions', () => {
+  test('operator precedence', async () => {
     const { body } = await api('POST', '/api/calculate', { expression: '1 + 2 * 3' });
     assert.equal(body.result, 7);
   });
 
-  test('括号改变优先级', async () => {
+  test('parentheses change precedence', async () => {
     const { body } = await api('POST', '/api/calculate', { expression: '(1+2)*3' });
     assert.equal(body.result, 9);
   });
 
-  test('一元正负号', async () => {
+  test('unary plus and minus signs', async () => {
     const negative = await api('POST', '/api/calculate', { expression: '-5 + 8' });
     assert.equal(negative.body.result, 3);
     const multiplied = await api('POST', '/api/calculate', { expression: '3 * -2' });
     assert.equal(multiplied.body.result, -6);
   });
 
-  test('前端传来的 × ÷ 会被后端正确解释', async () => {
+  test('the × and ÷ sent by the front end are interpreted correctly by the backend', async () => {
     const { body } = await api('POST', '/api/calculate', { expression: '12×8÷3' });
     assert.equal(body.result, 32);
-    // 归一化后的表达式会回显，便于排查「界面显示 × 实际算的是什么」
+    // The normalized expression is echoed back, making it easy to troubleshoot "the interface shows ×, what is actually computed"
     assert.equal(body.normalizedExpression, '12*8/3');
   });
 });
 
-describe('POST /api/calculate —— 异常处理', () => {
-  test('除以零返回 400 与明确错误码', async () => {
+describe('POST /api/calculate — error handling', () => {
+  test('division by zero returns 400 with an explicit error code', async () => {
     const { status, body } = await api('POST', '/api/calculate', { expression: '1/0' });
     assert.equal(status, 400);
     assert.equal(body.success, false);
@@ -147,7 +148,7 @@ describe('POST /api/calculate —— 异常处理', () => {
     assert.ok(body.message.length > 0);
   });
 
-  test('非法表达式返回 400', async () => {
+  test('illegal expressions return 400', async () => {
     const cases = [
       ['1+', 'UNEXPECTED_END'],
       ['(1+2', 'UNBALANCED_PARENTHESIS'],
@@ -156,24 +157,24 @@ describe('POST /api/calculate —— 异常处理', () => {
     ];
     for (const [expression, code] of cases) {
       const { status, body } = await api('POST', '/api/calculate', { expression });
-      assert.equal(status, 400, `表达式 ${expression} 应当返回 400`);
-      assert.equal(body.code, code, `表达式 ${expression} 错误码不符`);
+      assert.equal(status, 400, `Expression ${expression} should return 400`);
+      assert.equal(body.code, code, `Expression ${expression} returned a mismatched error code`);
     }
   });
 
-  test('非法字符会带上出错位置', async () => {
+  test('an illegal character carries its error position', async () => {
     const { body } = await api('POST', '/api/calculate', { expression: '1 @ 2' });
     assert.equal(body.detail.position, 3);
     assert.equal(body.detail.character, '@');
   });
 
-  test('缺少 expression 字段返回 400（前端无法绕过后端计算）', async () => {
+  test('a missing expression field returns 400 (the front end cannot bypass backend computation)', async () => {
     const { status, body } = await api('POST', '/api/calculate', {});
     assert.equal(status, 400);
     assert.equal(body.code, 'EXPRESSION_REQUIRED');
   });
 
-  test('expression 类型不对也返回 400', async () => {
+  test('a wrong expression type also returns 400', async () => {
     const numeric = await api('POST', '/api/calculate', { expression: 42 });
     assert.equal(numeric.status, 400);
     assert.equal(numeric.body.code, 'EXPRESSION_REQUIRED');
@@ -182,27 +183,27 @@ describe('POST /api/calculate —— 异常处理', () => {
     assert.equal(array.status, 400);
   });
 
-  test('空表达式返回 400', async () => {
+  test('an empty expression returns 400', async () => {
     const { status, body } = await api('POST', '/api/calculate', { expression: '   ' });
     assert.equal(status, 400);
     assert.equal(body.code, 'EXPRESSION_REQUIRED');
   });
 
-  test('超长表达式返回 400', async () => {
+  test('an over-long expression returns 400', async () => {
     const { status, body } = await api('POST', '/api/calculate', { expression: '1'.repeat(300) });
     assert.equal(status, 400);
     assert.equal(body.code, 'EXPRESSION_TOO_LONG');
   });
 
-  test('请求体不是合法 JSON 时返回 400', async () => {
-    const { status, body } = await api('POST', '/api/calculate', '{不是JSON');
+  test('a request body that is not valid JSON returns 400', async () => {
+    const { status, body } = await api('POST', '/api/calculate', '{not JSON');
     assert.equal(status, 400);
     assert.equal(body.code, 'MALFORMED_JSON');
   });
 });
 
-describe('历史记录 —— 功能三：持久化与查询', () => {
-  test('计算成功后能查到对应记录', async () => {
+describe('History — Feature 3: persistence and queries', () => {
+  test('after a successful calculation the matching record can be found', async () => {
     await resetHistory();
     await api('POST', '/api/calculate', { expression: '1+2' });
     await api('POST', '/api/calculate', { expression: '5*8' });
@@ -214,32 +215,32 @@ describe('历史记录 —— 功能三：持久化与查询', () => {
     assert.equal(body.total, 3);
     assert.equal(body.items.length, 3);
 
-    // 默认按时间倒序，最后算的排在最前
+    // Time descending by default, so the most recently computed one comes first
     assert.equal(body.items[0].expression, '(2+3)*4');
     assert.equal(body.items[0].result, 20);
 
-    // 每条记录都必须包含作业要求的三要素：表达式、结果、时间
+    // Every record must contain the three elements required by the assignment: expression, result, time
     for (const item of body.items) {
       assert.equal(typeof item.expression, 'string');
       assert.equal(typeof item.result, 'number');
       assert.equal(typeof item.resultText, 'string');
-      assert.ok(!Number.isNaN(Date.parse(item.createdAt)), 'createdAt 应当是合法的 ISO 时间');
+      assert.ok(!Number.isNaN(Date.parse(item.createdAt)), 'createdAt should be a valid ISO timestamp');
       assert.equal(typeof item.id, 'number');
     }
   });
 
-  test('失败的计算不写入历史', async () => {
+  test('a failed calculation is not written to history', async () => {
     await resetHistory();
     await api('POST', '/api/calculate', { expression: '1+1' });
     await api('POST', '/api/calculate', { expression: '1/0' });
     await api('POST', '/api/calculate', { expression: 'badexpr' });
 
     const { body } = await api('GET', '/api/history');
-    assert.equal(body.total, 1, '只有成功的计算才应该入库');
+    assert.equal(body.total, 1, 'Only successful calculations should be persisted');
     assert.equal(body.items[0].expression, '1+1');
   });
 
-  test('历史来自数据库：直接查库能对上接口返回的数据', async () => {
+  test('history comes from the database: a direct query matches the data returned by the endpoint', async () => {
     await resetHistory();
     await api('POST', '/api/calculate', { expression: '7*6' });
 
@@ -253,7 +254,7 @@ describe('历史记录 —— 功能三：持久化与查询', () => {
     assert.equal(Number(row.id), apiResult.body.items[0].id);
   });
 
-  test('分页', async () => {
+  test('pagination', async () => {
     await resetHistory();
     for (let i = 1; i <= 25; i += 1) {
       await api('POST', '/api/calculate', { expression: `${i}+0` });
@@ -267,13 +268,13 @@ describe('历史记录 —— 功能三：持久化与查询', () => {
     const lastPage = await api('GET', '/api/history?page=3&pageSize=10');
     assert.equal(lastPage.body.items.length, 5);
 
-    // 翻页不应该出现重复记录
+    // Paging must not produce duplicate records
     const firstIds = firstPage.body.items.map((item) => item.id);
     const lastIds = lastPage.body.items.map((item) => item.id);
     assert.equal(firstIds.filter((id) => lastIds.includes(id)).length, 0);
   });
 
-  test('关键词搜索', async () => {
+  test('keyword search', async () => {
     await resetHistory();
     await api('POST', '/api/calculate', { expression: '100+200' });
     await api('POST', '/api/calculate', { expression: '3*3' });
@@ -283,7 +284,7 @@ describe('历史记录 —— 功能三：持久化与查询', () => {
     assert.equal(body.total, 2);
   });
 
-  test('分页参数非法时返回 400', async () => {
+  test('illegal pagination parameters return 400', async () => {
     const negative = await api('GET', '/api/history?page=-1');
     assert.equal(negative.status, 400);
     assert.equal(negative.body.code, 'INVALID_PAGINATION');
@@ -295,17 +296,17 @@ describe('历史记录 —— 功能三：持久化与查询', () => {
     assert.equal(zeroSize.status, 400);
   });
 
-  test('pageSize 被强制限制在上限内', async () => {
+  test('pageSize is forced within the upper limit', async () => {
     await resetHistory();
     await api('POST', '/api/calculate', { expression: '1+1' });
 
     const { body } = await api('GET', '/api/history?pageSize=100000');
-    assert.equal(body.pageSize, 100, 'pageSize 应当被压到配置的上限 100');
+    assert.equal(body.pageSize, 100, 'pageSize should be clamped to the configured maximum of 100');
   });
 });
 
-describe('历史记录 —— 功能四：删除', () => {
-  test('删除指定 id 的记录', async () => {
+describe('History — Feature 4: deletion', () => {
+  test('delete the record with the given id', async () => {
     await resetHistory();
     const first = await api('POST', '/api/calculate', { expression: '1+1' });
     await api('POST', '/api/calculate', { expression: '2+2' });
@@ -319,7 +320,7 @@ describe('历史记录 —— 功能四：删除', () => {
     assert.equal(deletion.body.success, true);
     assert.equal(deletion.body.deleted, 1);
 
-    // 前端重新查询，应当只剩 2 条，且被删的那条真的不在库里
+    // The front end queries again and should see only 2 left, with the deleted one truly gone from the database
     const after = await api('GET', '/api/history');
     assert.equal(after.body.total, 2);
     assert.equal(
@@ -330,17 +331,17 @@ describe('历史记录 —— 功能四：删除', () => {
     const row = getDatabase()
       .prepare('SELECT COUNT(*) AS total FROM calculation_history WHERE id = ?')
       .get(first.body.id);
-    assert.equal(Number(row.total), 0, '数据库里应当确实被删掉了');
+    assert.equal(Number(row.total), 0, 'The row should really be deleted from the database');
   });
 
-  test('删除不存在的 id 返回 404', async () => {
+  test('deleting a nonexistent id returns 404', async () => {
     const { status, body } = await api('DELETE', '/api/history/999999');
     assert.equal(status, 404);
     assert.equal(body.success, false);
     assert.equal(body.code, 'HISTORY_NOT_FOUND');
   });
 
-  test('id 非法时返回 400 而不是 404', async () => {
+  test('an illegal id returns 400 rather than 404', async () => {
     const notANumber = await api('DELETE', '/api/history/abc');
     assert.equal(notANumber.status, 400);
     assert.equal(notANumber.body.code, 'INVALID_HISTORY_ID');
@@ -349,7 +350,7 @@ describe('历史记录 —— 功能四：删除', () => {
     assert.equal(negative.status, 400);
   });
 
-  test('清空全部历史', async () => {
+  test('clear all history', async () => {
     await resetHistory();
     await api('POST', '/api/calculate', { expression: '1+1' });
     await api('POST', '/api/calculate', { expression: '2+2' });
@@ -363,8 +364,8 @@ describe('历史记录 —— 功能四：删除', () => {
   });
 });
 
-describe('扩展功能：收藏与统计', () => {
-  test('切换收藏状态', async () => {
+describe('Extension features: favorites and statistics', () => {
+  test('toggle the favorite state', async () => {
     await resetHistory();
     const created = await api('POST', '/api/calculate', { expression: '4+4' });
     const id = created.body.id;
@@ -376,17 +377,17 @@ describe('扩展功能：收藏与统计', () => {
     const toggledOff = await api('PATCH', `/api/history/${id}/favorite`, { isFavorite: false });
     assert.equal(toggledOff.body.item.isFavorite, false);
 
-    // 不传目标状态时应当取反
+    // When no target state is passed, it should negate
     const implicit = await api('PATCH', `/api/history/${id}/favorite`);
     assert.equal(implicit.body.item.isFavorite, true);
   });
 
-  test('收藏不存在的记录返回 404', async () => {
+  test('favoriting a nonexistent record returns 404', async () => {
     const { status } = await api('PATCH', '/api/history/999999/favorite');
     assert.equal(status, 404);
   });
 
-  test('统计接口', async () => {
+  test('statistics endpoint', async () => {
     await resetHistory();
     await api('POST', '/api/calculate', { expression: '10+10' });
     await api('POST', '/api/calculate', { expression: '10+10' });
@@ -402,7 +403,7 @@ describe('扩展功能：收藏与统计', () => {
     assert.equal(body.stats.timezone, 'UTC');
   });
 
-  test('空库时统计不报错', async () => {
+  test('statistics do not error on an empty database', async () => {
     await resetHistory();
     const { status, body } = await api('GET', '/api/history/stats');
     assert.equal(status, 200);
@@ -411,8 +412,8 @@ describe('扩展功能：收藏与统计', () => {
   });
 });
 
-describe('扩展功能：进制换算', () => {
-  test('十进制转二进制', async () => {
+describe('Extension features: base conversion', () => {
+  test('decimal to binary', async () => {
     const { status, body } = await api('POST', '/api/convert/base', {
       value: '10',
       fromBase: 10,
@@ -422,7 +423,7 @@ describe('扩展功能：进制换算', () => {
     assert.equal(body.output, '1010');
   });
 
-  test('十进制转十六进制', async () => {
+  test('decimal to hexadecimal', async () => {
     const { body } = await api('POST', '/api/convert/base', {
       value: '1234',
       fromBase: 10,
@@ -431,7 +432,7 @@ describe('扩展功能：进制换算', () => {
     assert.equal(body.output, '4d2');
   });
 
-  test('十六进制转十进制', async () => {
+  test('hexadecimal to decimal', async () => {
     const { body } = await api('POST', '/api/convert/base', {
       value: 'ff',
       fromBase: 16,
@@ -440,8 +441,8 @@ describe('扩展功能：进制换算', () => {
     assert.equal(body.output, '255');
   });
 
-  test('大整数不丢精度（BigInt 而非 Number）', async () => {
-    // 2^64 在 Number 下无法精确表示，必须靠 BigInt
+  test('large integers lose no precision (BigInt rather than Number)', async () => {
+    // 2^64 cannot be represented exactly with Number, so BigInt is required
     const { body } = await api('POST', '/api/convert/base', {
       value: 'ffffffffffffffff',
       fromBase: 16,
@@ -450,7 +451,7 @@ describe('扩展功能：进制换算', () => {
     assert.equal(body.output, '18446744073709551615');
   });
 
-  test('二进制小数转换', async () => {
+  test('binary fraction conversion', async () => {
     const { body } = await api('POST', '/api/convert/base', {
       value: '0.101',
       fromBase: 2,
@@ -459,7 +460,7 @@ describe('扩展功能：进制换算', () => {
     assert.equal(body.output, '0.625');
   });
 
-  test('负数与非法数字', async () => {
+  test('negative numbers and illegal digits', async () => {
     const negative = await api('POST', '/api/convert/base', {
       value: '-101',
       fromBase: 2,
@@ -467,7 +468,7 @@ describe('扩展功能：进制换算', () => {
     });
     assert.equal(negative.body.output, '-5');
 
-    // 二进制里没有数字 9
+    // There is no digit 9 in binary
     const invalid = await api('POST', '/api/convert/base', {
       value: '129',
       fromBase: 2,
@@ -477,7 +478,7 @@ describe('扩展功能：进制换算', () => {
     assert.equal(invalid.body.code, 'INVALID_BASE_CONVERSION');
   });
 
-  test('进制越界返回 400', async () => {
+  test('an out-of-range base returns 400', async () => {
     const tooSmall = await api('POST', '/api/convert/base', {
       value: '1', fromBase: 1, toBase: 10,
     });
@@ -490,8 +491,8 @@ describe('扩展功能：进制换算', () => {
   });
 });
 
-describe('扩展功能：单位换算', () => {
-  test('长度换算', async () => {
+describe('Extension features: unit conversion', () => {
+  test('length conversion', async () => {
     const { status, body } = await api('POST', '/api/convert/unit', {
       category: 'length',
       from: 'km',
@@ -502,7 +503,7 @@ describe('扩展功能：单位换算', () => {
     assert.equal(body.outputText, '1500');
   });
 
-  test('温度换算是仿射变换，不是简单乘法', async () => {
+  test('temperature conversion is an affine transform, not simple multiplication', async () => {
     const freezing = await api('POST', '/api/convert/unit', {
       category: 'temperature', from: 'c', to: 'f', value: 0,
     });
@@ -519,7 +520,7 @@ describe('扩展功能：单位换算', () => {
     assert.equal(toKelvin.body.output, 273.15);
   });
 
-  test('未知类别或单位返回 400', async () => {
+  test('an unknown category or unit returns 400', async () => {
     const badCategory = await api('POST', '/api/convert/unit', {
       category: 'nonsense', from: 'a', to: 'b', value: 1,
     });
@@ -532,7 +533,7 @@ describe('扩展功能：单位换算', () => {
     assert.equal(badUnit.status, 400);
   });
 
-  test('单位清单接口供前端渲染下拉框', async () => {
+  test('the unit list endpoint feeds the front-end dropdowns', async () => {
     const { status, body } = await api('GET', '/api/convert/units');
     assert.equal(status, 200);
     assert.ok(body.categories.length >= 5);
@@ -543,22 +544,22 @@ describe('扩展功能：单位换算', () => {
   });
 });
 
-describe('接口约定', () => {
-  test('未知路由返回 404', async () => {
+describe('API conventions', () => {
+  test('an unknown route returns 404', async () => {
     const { status, body } = await api('GET', '/api/does-not-exist');
     assert.equal(status, 404);
     assert.equal(body.success, false);
     assert.equal(body.code, 'ROUTE_NOT_FOUND');
   });
 
-  test('根路径返回服务说明', async () => {
+  test('the root path returns the service description', async () => {
     const { status, body } = await api('GET', '/');
     assert.equal(status, 200);
     assert.equal(body.success, true);
     assert.equal(body.apiPrefix, '/api');
   });
 
-  test('成功与失败响应都带 success 标志位', async () => {
+  test('both success and failure responses carry the success flag', async () => {
     const ok = await api('POST', '/api/calculate', { expression: '1+1' });
     assert.equal(ok.body.success, true);
 
@@ -566,7 +567,7 @@ describe('接口约定', () => {
     assert.equal(fail.body.success, false);
   });
 
-  test('响应包含 CORS 预检支持', async () => {
+  test('responses include CORS preflight support', async () => {
     const response = await fetch(`${baseUrl}/api/calculate`, {
       method: 'OPTIONS',
       headers: { Origin: 'http://localhost:5500' },
@@ -578,7 +579,7 @@ describe('接口约定', () => {
     );
   });
 
-  test('非白名单来源不会拿到 CORS 许可头', async () => {
+  test('a non-whitelisted origin does not receive the CORS allow header', async () => {
     const response = await fetch(`${baseUrl}/api/calculate`, {
       method: 'OPTIONS',
       headers: { Origin: 'http://evil.example.com' },

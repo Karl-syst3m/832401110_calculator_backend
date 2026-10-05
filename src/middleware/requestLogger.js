@@ -1,13 +1,13 @@
 /**
- * 请求日志中间件。
+ * Request logging middleware.
  *
- * 记录「方法 + 路径 + 状态码 + 耗时」，一行一条。
- * 这四样东西是排查接口问题的最小充分信息：
- *   - 状态码异常 -> 看是不是请求本身有问题；
- *   - 耗时突增   -> 看是不是数据库慢查询。
+ * It records "method + path + status code + elapsed time", one line each.
+ * These four things are the minimum sufficient information for troubleshooting an endpoint:
+ *   - an abnormal status code -> check whether the request itself is the problem;
+ *   - a sudden jump in elapsed time -> check whether a slow database query is the problem.
  *
- * 用 res.on('finish') 而不是在 next() 之后打日志，是因为必须等到响应真正发完
- * 才能拿到最终状态码。
+ * res.on('finish') is used rather than logging after next(), because the final status code is only
+ * available once the response has actually finished being sent.
  */
 
 import { createLogger } from '../utils/logger.js';

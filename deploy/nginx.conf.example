@@ -1,35 +1,37 @@
 # =============================================================================
-# nginx 配置示例 —— 前后端分离计算器系统
+# nginx configuration example — calculator system with separated frontend and backend
 #
-# 用途：把前端静态文件与后端接口放在同一个源下，
-#       前端用相对路径 /api 访问后端，浏览器不会发起跨域请求。
+# Purpose: serve the frontend static files and the backend API under the same origin, so
+#          the frontend reaches the backend at the relative path /api and the browser
+#          never issues a cross-origin request.
 #
-# 部署前必须替换的占位符：
-#   <DOMAIN>          你的域名或子域名，例如 calc.example.com
-#   <FRONTEND_ROOT>   前端静态文件目录，例如 /var/www/calculator
-#   <CERT_PATH>       HTTPS 证书目录（若启用 HTTPS）
+# Placeholders that must be replaced before deployment:
+#   <DOMAIN>          your domain or subdomain, for example calc.example.com
+#   <FRONTEND_ROOT>   frontend static file directory, for example /var/www/calculator
+#   <CERT_PATH>       HTTPS certificate directory (if HTTPS is enabled)
 #
-# 注意：本示例使用 80 端口。若服务器上 80 端口已被其他站点占用
-# （可用 `ss -ltn | grep :80` 确认），请改用子域名方案：
-# 新建本文件的 server 块，server_name 填子域名即可，nginx 会按域名分流，
-# 不会与已有的默认站点冲突。
+# Note: this example uses port 80. If port 80 on the server is already taken by another
+# site (check with `ss -ltn | grep :80`), switch to the subdomain approach instead:
+# create a server block from this file and set server_name to the subdomain; nginx routes
+# by domain name, so it will not conflict with the existing default site.
 # =============================================================================
 
-# ---------- 上游：后端服务 ----------
+# ---------- Upstream: the backend service ----------
 upstream calculator_backend {
-    # 后端只监听回环地址，不直接暴露公网，所有流量经 nginx 转发
+    # The backend listens only on the loopback address and is never exposed publicly; all traffic is forwarded by nginx
     server 127.0.0.1:5000;
     keepalive 16;
 }
 
-# ---------- HTTP：重定向到 HTTPS ----------
-# 若暂未配置证书，可整段删除，并让下方 443 的配置用 80 端口。
+# ---------- HTTP: redirect to HTTPS ----------
+# If no certificate is configured yet, this whole block can be deleted and the 443
+# configuration below moved to port 80.
 server {
     listen 80;
     listen [::]:80;
     server_name <DOMAIN>;
 
-    # 保留 ACME 校验路径，便于用 certbot 签发证书
+    # Keep the ACME validation path so certificates can be issued with certbot
     location /.well-known/acme-challenge/ {
         root /var/www/certbot;
     }
@@ -39,14 +41,14 @@ server {
     }
 }
 
-# ---------- HTTPS：主站 ----------
+# ---------- HTTPS: the main site ----------
 server {
     listen 443 ssl;
     listen [::]:443 ssl;
     http2 on;
     server_name <DOMAIN>;
 
-    # ---- 证书 ----
+    # ---- Certificates ----
     ssl_certificate     <CERT_PATH>/fullchain.pem;
     ssl_certificate_key <CERT_PATH>/privkey.pem;
     ssl_protocols       TLSv1.2 TLSv1.3;
@@ -54,20 +56,21 @@ server {
     ssl_session_cache   shared:SSL:10m;
     ssl_session_timeout 1d;
 
-    # ---- 安全响应头 ----
+    # ---- Security response headers ----
     add_header X-Content-Type-Options "nosniff" always;
     add_header X-Frame-Options "SAMEORIGIN" always;
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-    # 本项目前端不使用内联脚本与内联样式（主题变量走 CSS 文件），
-    # 因此可以采用较严格的 CSP。若后续引入内联脚本需相应放宽。
+    # The frontend of this project uses neither inline scripts nor inline styles (theme
+    # variables live in a CSS file), so a fairly strict CSP can be used. It will have to be
+    # relaxed accordingly if inline scripts are introduced later.
     add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'" always;
 
-    # ---- 压缩 ----
+    # ---- Compression ----
     gzip on;
     gzip_types text/plain text/css application/javascript application/json image/svg+xml;
     gzip_min_length 1024;
 
-    # ---- 前端静态文件 ----
+    # ---- Frontend static files ----
     root <FRONTEND_ROOT>;
     index index.html;
 
@@ -75,26 +78,27 @@ server {
         try_files $uri $uri/ /index.html;
     }
 
-    # 带指纹的静态资源可长期缓存；本项目文件名不含指纹，故只对图片与字体长缓存。
+    # Fingerprinted static assets could be cached long-term; file names in this project
+    # carry no fingerprint, so only images and fonts get a long cache.
     location ~* \.(?:png|jpe?g|gif|webp|svg|ico|woff2?)$ {
         expires 30d;
         add_header Cache-Control "public, immutable";
         try_files $uri =404;
     }
 
-    # HTML 与 JS/CSS 不缓存，保证改完刷新即可生效
+    # HTML and JS/CSS are not cached, so an edit takes effect on the next refresh
     location ~* \.(?:html|js|css)$ {
         add_header Cache-Control "no-cache, must-revalidate";
         try_files $uri =404;
     }
 
-    # ---- 后端接口反向代理 ----
+    # ---- Reverse proxy for the backend API ----
     location /api/ {
         proxy_pass http://calculator_backend;
         proxy_http_version 1.1;
 
         proxy_set_header Host              $host;
-        # 后端开了 trust proxy，靠这两个头拿到真实客户端 IP
+        # The backend enables trust proxy; these two headers provide the real client IP
         proxy_set_header X-Real-IP         $remote_addr;
         proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
@@ -104,18 +108,18 @@ server {
         proxy_send_timeout    15s;
         proxy_read_timeout    15s;
 
-        # 接口响应不应被缓存
+        # API responses should not be cached
         proxy_buffering off;
         add_header Cache-Control "no-store";
     }
 
-    # ---- 健康检查（可直接被外部探活） ----
+    # ---- Health check (can be probed from outside directly) ----
     location = /healthz {
         proxy_pass http://calculator_backend/api/health;
         access_log off;
     }
 
-    # ---- 隐藏文件与备份文件 ----
+    # ---- Hidden files and backup files ----
     location ~ /\. {
         deny all;
         return 404;

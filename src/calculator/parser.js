@@ -1,18 +1,20 @@
 /**
- * 语法分析（Parser）——递归下降法
+ * Parsing (Parser) — recursive descent
  *
- * 为什么选手写递归下降，而不是：
- *   - 用 eval / new Function：作业明令禁止，它们会把用户输入当程序代码执行，
- *     一句 `process.exit()` 就能把服务打垮，属于典型的注入漏洞。
- *   - 用 shunting-yard（调度场算法）：也能算对，但它只产出后缀序列，
- *     不便于在求值前区分「语法错误」和「数学错误」，也不便于将来扩展函数调用。
- *   - 引第三方库（如 mathjs）：合法且省事，但 `mathjs` 会顺带支持赋值、单位、
- *     矩阵等能力，攻击面远大于一个计算器所需。
+ * Why hand-written recursive descent, rather than:
+ *   - Using eval / new Function: explicitly forbidden by the assignment; they execute user input as
+ *     program code, so a single `process.exit()` can take the service down — a textbook injection vulnerability.
+ *   - Using shunting-yard: it computes correctly too, but it only produces a postfix sequence, which
+ *     makes it awkward to separate "syntax errors" from "mathematical errors" before evaluation, and
+ *     awkward to extend with function calls later.
+ *   - Pulling in a third-party library (such as mathjs): legal and convenient, but `mathjs` also
+ *     supports assignment, units, matrices and more, an attack surface far larger than a calculator needs.
  *
- * 递归下降的最大好处是「文法即代码」：下面每个函数一一对应一条文法产生式，
- * 代码结构和数学书写习惯同形，评审者可以直接对照文法检查正确性。
+ * The greatest benefit of recursive descent is that "the grammar is the code": each function below
+ * corresponds one-to-one to a grammar production, the code structure matches how mathematics is
+ * written, and a reviewer can check correctness directly against the grammar.
  *
- * 文法（EBNF，越靠前优先级越低）：
+ * Grammar (EBNF, earlier means lower precedence):
  *
  *   expression   := additive
  *   additive     := multiplicative ( ("+" | "-") multiplicative )*
@@ -25,39 +27,41 @@
  *                 | "(" expression ")"
  *   arguments    := expression ( "," expression )*
  *
- * 三处容易写错、需要特别说明的优先级取舍：
+ * Three precedence trade-offs that are easy to get wrong and need special explanation:
  *
- * 1) 负号与乘方的结合：-2^2 应当等于 -4（先算幂再取负），
- *    所以 unary 在 power 之上，即 unary 先吃掉负号，再把剩下的交给 power。
+ * 1) Binding of the minus sign and exponentiation: -2^2 should equal -4 (the power is computed first,
+ *    then the negation), so unary sits above power, i.e. unary consumes the minus sign first and hands
+ *    the rest to power.
  *
- * 2) 幂的右结合：2^3^2 应当等于 2^9 = 512，所以 power 的指数部分递归调用 unary
- *    而不是 primary，这让它继续向右吃掉下一个 ^。
+ * 2) Right associativity of exponentiation: 2^3^2 should equal 2^9 = 512, so the exponent part of
+ *    power calls unary recursively rather than primary, which lets it keep consuming the next ^ to the right.
  *
- * 3) 指数允许带负号：2^-3 应当合法（等于 0.125）。
- *    正因为 power 的指数用了 unary，"-3" 才能被正确解析；若用 primary 就做不到。
+ * 3) Exponents may carry a minus sign: 2^-3 should be legal (equal to 0.125).
+ *    It is precisely because power's exponent uses unary that "-3" can be parsed correctly; primary would not do it.
  */
 
 import { CalculatorError, ErrorCodes } from './errors.js';
 import { tokenize, TokenType } from './tokenizer.js';
 
 /**
- * 括号/一元符号的最大嵌套深度。
- * 递归下降的深度正比于输入里嵌套层数，不设上限的话，
- * 一个 "((" 重复十万次的请求就能把调用栈打爆（栈溢出属于可用性问题）。
- * 64 层远超任何正常算式，因此限制它不会影响真实使用。
+ * Maximum nesting depth of parentheses / unary signs.
+ * The depth of recursion is proportional to the nesting level in the input; without a limit, a request
+ * with "((" repeated a hundred thousand times would blow up the call stack (a stack overflow is an
+ * availability problem).
+ * 64 levels is far beyond any normal expression, so limiting it does not affect real use.
  */
 const MAX_DEPTH = 64;
 
 /**
- * 把表达式解析为抽象语法树（AST）。
+ * Parse an expression into an abstract syntax tree (AST).
  *
- * 为什么不边解析边求值？
- * 因为分离之后，「表达式合不合法」这件事可以脱离数值单独测试；
- * 而且求值阶段拿到的是一棵结构化的树，遇到 sqrt(-1) 这类定义域问题
- * 能精确定位到「哪个函数、哪个参数」，报错质量完全不同。
+ * Why not evaluate while parsing?
+ * Because once separated, "is the expression legal" can be tested independently of numeric values;
+ * and the evaluation stage receives a structured tree, so a domain problem such as sqrt(-1) can be
+ * pinpointed to "which function, which argument", a completely different quality of error report.
  *
- * @param {string} source 已经过归一化的表达式
- * @returns {object} AST 根节点
+ * @param {string} source an already normalized expression
+ * @returns {object} AST root node
  * @throws {CalculatorError}
  */
 export function parse(source) {
@@ -114,8 +118,8 @@ export function parse(source) {
       enterDepth();
       const operand = parseUnary();
       leaveDepth();
-      // 一元正号在数学上恒等，但保留节点可以让 AST 忠实反映用户输入，
-      // 也便于将来做「表达式回显」。求值时会自然简化。
+      // The unary plus sign is mathematically an identity, but keeping the node lets the AST faithfully
+      // reflect the user's input and makes "expression echo" easier in the future. Evaluation simplifies it naturally.
       return { type: 'Unary', op: token.value, operand };
     }
     return parsePower();
@@ -125,7 +129,8 @@ export function parse(source) {
     const base = parsePrimary();
     if (peek().type === TokenType.OPERATOR && peek().value === '^') {
       advance();
-      // 指数位置调用 parseUnary：既实现右结合，又允许 2^-3 这种写法。
+      // The exponent position calls parseUnary: this both implements right associativity and allows
+      // the 2^-3 form.
       const exponent = parseUnary();
       return { type: 'Binary', op: '^', left: base, right: exponent };
     }
@@ -135,7 +140,7 @@ export function parse(source) {
   function parseArguments() {
     const args = [];
     if (peek().type === TokenType.RPAREN) {
-      return args; // 空参数列表，例如 random()；参数个数是否合法交给求值阶段判断
+      return args; // Empty argument list, as in random(); whether the count is legal is left to the evaluation stage
     }
     args.push(parseExpression());
     while (peek().type === TokenType.COMMA) {
@@ -166,7 +171,8 @@ export function parse(source) {
         );
       }
       advance();
-      // 不额外包一层分组节点：括号只影响结合顺序，结构上已由树形体现。
+      // No extra grouping node is wrapped around it: parentheses only affect the order of association,
+      // which the tree structure already expresses.
       return inner;
     }
 
@@ -190,7 +196,7 @@ export function parse(source) {
         return { type: 'Call', name, args };
       }
 
-      // 不带括号的标识符一律当常量处理，是否认识它由求值阶段判断。
+      // Any identifier without parentheses is treated as a constant; whether it is known is decided by the evaluation stage.
       return { type: 'Constant', name };
     }
 
@@ -211,8 +217,9 @@ export function parse(source) {
 
   const ast = parseExpression();
 
-  // 解析必须恰好消耗完整串。剩下记号说明表达式在合法前缀之后还有多余内容，
-  // 例如 "1+2)" 或 "1 2"。这类错误若被忽略，用户会拿到一个「看起来对」的结果。
+  // Parsing must consume exactly the whole string. Leftover tokens mean the expression has extra
+  // content after a legal prefix, for example "1+2)" or "1 2". If such an error were ignored, the user
+  // would get a result that "looks right".
   if (peek().type !== TokenType.EOF) {
     const token = peek();
     throw new CalculatorError(

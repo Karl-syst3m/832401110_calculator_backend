@@ -1,17 +1,21 @@
 /**
- * Express 应用装配。
+ * Express application assembly.
  *
- * 这里只负责「按正确顺序装上中间件和路由」，不启动监听。
- * 把 app 的构造与 listen 分开，是为了让集成测试可以直接拿到 app 对象，
- * 在随机端口上起服务（见 tests/api.test.js），而不必去抢固定端口。
+ * This module is only responsible for "mounting middleware and routes in the correct order";
+ * it does not start the listener. Keeping the construction of the app separate from listen()
+ * lets integration tests receive the app object directly and start the service on a random
+ * port (see tests/api.test.js), instead of having to fight over a fixed port.
  *
- * 中间件顺序是有讲究的，从上到下依次是：
- *   1. corsMiddleware   —— 预检请求要尽早短路，不进入后面的 JSON 解析与业务逻辑；
- *   2. requestLogger    —— 尽早注册，才能覆盖到后面所有中间件的耗时；
- *   3. express.json()   —— 解析请求体（限流上限配置在 config 里）；
- *   4. /api 路由        —— 业务逻辑；
- *   5. notFoundHandler  —— 路由都没匹配上，构造 404；
- *   6. errorHandler     —— 必须放在最后，Express 只认注册顺序最后的四参错误处理函数。
+ * The middleware order is deliberate; from top to bottom it is:
+ *   1. corsMiddleware   — preflight requests must short-circuit as early as possible, without
+ *                         entering the JSON parsing and business logic that follow;
+ *   2. requestLogger    — register it as early as possible so it can cover the elapsed time
+ *                         of every middleware that follows;
+ *   3. express.json()   — parse the request body (the size limit is configured in config);
+ *   4. /api routes      — business logic;
+ *   5. notFoundHandler  — nothing matched a route, so construct a 404;
+ *   6. errorHandler     — must be last, because Express only honors the four-argument error
+ *                         handler that was registered last.
  */
 
 import express from 'express';
@@ -22,18 +26,19 @@ import { requestLogger } from './middleware/requestLogger.js';
 import { notFoundHandler, errorHandler } from './middleware/errorHandler.js';
 
 /**
- * 创建 Express 应用实例。
+ * Create an Express application instance.
  * @returns {import('express').Express}
  */
 export function createApp() {
   const app = express();
 
-  // 关掉 X-Powered-By 响应头。它会把「这是 Express」告诉每一个访问者，
-  // 便于攻击者按框架版本去查已知漏洞。关掉它成本为零。
+  // Disable the X-Powered-By response header. It tells every visitor "this is Express",
+  // which helps an attacker look up known vulnerabilities by framework version.
+  // Disabling it costs nothing.
   app.disable('x-powered-by');
 
-  // 部署在 nginx 之后，真实客户端 IP 在 X-Forwarded-For 里。
-  // 打开 trust proxy 后，req.ip 才会返回真实 IP 而不是 127.0.0.1。
+  // Deployed behind nginx, the real client IP lives in X-Forwarded-For.
+  // Only with trust proxy enabled does req.ip return the real IP rather than 127.0.0.1.
   app.set('trust proxy', true);
 
   app.use(corsMiddleware);
@@ -42,12 +47,13 @@ export function createApp() {
 
   app.use('/api', router);
 
-  // 访问根路径时给一句人话，方便部署后手动确认服务活着。
+  // Visiting the root path returns a plain-language line so that after deployment
+  // the service can be confirmed alive by hand.
   app.get('/', (req, res) => {
     res.json({
       success: true,
       service: 'calculator-backend',
-      message: '前后端分离计算器系统后端已运行。接口前缀为 /api，健康检查位于 /api/health。',
+      message: 'The backend of the front-end/back-end separated calculator system is running. The API prefix is /api and the health check is at /api/health.',
       apiPrefix: '/api',
     });
   });

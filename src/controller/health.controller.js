@@ -1,9 +1,11 @@
 /**
- * 健康检查接口。
+ * Health check endpoint.
  *
- * 部署时非常有用：nginx 反代配好之后，用一个 GET /api/health 就能确认
- * 「后端进程活着、数据库能读、版本对不对」，不必去翻日志。
- * 作业要求「部署后验证可访问性」，这个接口就是验证手段本身。
+ * Extremely useful during deployment: once the nginx reverse proxy is configured, a single
+ * GET /api/health confirms "the backend process is alive, the database is readable, the version is
+ * right", with no need to dig through logs.
+ * The assignment requires "verify accessibility after deployment", and this endpoint is the
+ * verification means itself.
  */
 
 import { getDatabase } from '../db/connection.js';
@@ -15,8 +17,8 @@ export function health(req, res) {
   let historyCount = null;
 
   try {
-    // 真的去查一次库，而不是只检查连接对象是否存在。
-    // 只有真正执行一条 SQL，才能确认文件没损坏、权限没问题。
+    // Actually query the database once, rather than only checking whether a connection object exists.
+    // Only by truly executing a SQL statement can we confirm the file is not damaged and permissions are fine.
     const row = getDatabase().prepare('SELECT COUNT(*) AS total FROM calculation_history').get();
     historyCount = Number(row.total);
   } catch (error) {

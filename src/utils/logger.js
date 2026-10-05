@@ -1,15 +1,18 @@
 /**
- * 极简结构化日志。
+ * Minimal structured logging.
  *
- * 为什么不用 winston / pino？
- * 本项目的日志需求只有「打时间、级别、模块、消息」，为此引入一个几百 KB 的依赖
- * 并不划算。作业的技术复杂度不是评分重点，能用二十行说清楚的事就不要引库。
- * 将来若需要日志切割、上报，再换 pino 也只是替换这一个文件。
+ * Why not winston / pino?
+ * This project's logging needs are only "print time, level, module, message", and pulling in a few
+ * hundred KB of dependency for that is not worthwhile.
+ * Technical complexity is not the grading focus of the assignment; anything twenty lines can explain
+ * clearly should not drag in a library.
+ * If log rotation or reporting is needed later, switching to pino is still a matter of replacing this
+ * one file.
  */
 
 import process from 'node:process';
 
-/** 数值越小越严重，用来做「当前级别以下不输出」的过滤。 */
+/** The smaller the number the more severe, used to filter "do not output below the current level". */
 const LEVEL_WEIGHT = { error: 0, warn: 1, info: 2, debug: 3 };
 
 function shouldLog(level, configuredLevel) {
@@ -19,9 +22,9 @@ function shouldLog(level, configuredLevel) {
 }
 
 /**
- * 创建一个带作用域名的 logger。
- * @param {string} scope 模块名，会体现在每条日志里，方便定位来源
- * @param {string} [level] 最低输出级别
+ * Create a logger with a scope name.
+ * @param {string} scope module name, appearing in every log line to make the source easy to locate
+ * @param {string} [level] minimum output level
  */
 export function createLogger(scope, level = 'info') {
   const write = (stream, logLevel, message, extra) => {

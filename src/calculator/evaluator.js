@@ -1,21 +1,25 @@
 /**
- * 求值（Evaluator）
+ * Evaluation
  *
- * 输入是 parser 产出的 AST，输出是一个双精度浮点数。
- * 这一层负责所有「只跟数值有关」的判断：除零、定义域、参数个数、结果溢出。
+ * The input is the AST produced by the parser, and the output is a double-precision float.
+ * This layer is responsible for every judgment that is "purely about numbers": division by zero,
+ * domain, argument count, and result overflow.
  *
- * 安全边界说明：
- * FUNCTIONS 与 CONSTANTS 是两张白名单表。标识符先在这一层被查表，
- * 表里没有就直接报错，**不存在任何「按名字动态取函数」的路径**。
- * 这跟 eval 的本质区别在于：用户输入只被用来「查表」，永远不会被当作代码执行，
- * 所以即便有人提交 sqrt(1) 之外的任何怪异输入，能触及的也只是这张表里的纯数学函数。
+ * Security boundary notes:
+ * FUNCTIONS and CONSTANTS are two whitelist tables. Identifiers are looked up in these tables at
+ * this layer first; anything absent from a table is reported as an error immediately, and **there
+ * is no path anywhere that "fetches a function dynamically by name"**.
+ * The essential difference from eval is this: user input is only ever used to "look up a table",
+ * never executed as code, so even if someone submits any bizarre input other than sqrt(1), all they
+ * can reach are the pure mathematical functions in that table.
  */
 
 import { CalculatorError, ErrorCodes } from './errors.js';
 
 /**
- * 构造定义域错误。单独抽出来是因为定义域错误在这张表里出现得非常频繁，
- * 集中一处可以让每个函数体保持一行，便于通读。
+ * Construct a domain error. It is extracted separately because domain errors occur extremely
+ * often in this table, and centralizing them lets every function body stay on one line, which
+ * makes it easier to read through.
  */
 function domainError(name, args) {
   return new CalculatorError(
@@ -33,7 +37,7 @@ function divisionByZero(operation, dividend, divisor) {
   );
 }
 
-/** 支持的数学常量。 */
+/** Supported mathematical constants. */
 export const CONSTANTS = Object.freeze({
   pi: Math.PI,
   e: Math.E,
@@ -41,10 +45,11 @@ export const CONSTANTS = Object.freeze({
 });
 
 /**
- * 支持的函数白名单。
- * 每个条目声明参数个数区间（minArgs/maxArgs）与一个纯函数 apply。
- * 把参数个数写进表里，是为了让「函数名存在但参数写错」也给出明确错误，
- * 而不是算出 NaN 让用户去猜。
+ * Whitelist of supported functions.
+ * Each entry declares an argument count interval (minArgs/maxArgs) and a pure function apply.
+ * Writing the argument counts into the table is what lets "the function name exists but the
+ * arguments are wrong" also produce a clear error, instead of computing NaN and leaving the user
+ * to guess.
  */
 export const FUNCTIONS = Object.freeze({
   abs: { minArgs: 1, maxArgs: 1, apply: ([x]) => Math.abs(x) },
@@ -66,8 +71,9 @@ export const FUNCTIONS = Object.freeze({
     minArgs: 1,
     maxArgs: 1,
     apply: ([x]) => {
-      // tan 在 pi/2 处没有定义。双精度下 Math.cos(Math.PI/2) 约为 6.1e-17 而非精确 0，
-      // 直接算会得到一个 1.6e16 量级的荒唐数字。这里显式拦截，报定义域错误。
+      // tan is undefined at pi/2. In double precision Math.cos(Math.PI/2) is about 6.1e-17
+      // rather than exactly 0, so computing it directly yields an absurd number on the order of
+      // 1.6e16. We intercept it explicitly and report a domain error.
       if (Math.abs(Math.cos(x)) < 1e-12) throw domainError('tan', [x]);
       return Math.tan(x);
     },
@@ -157,8 +163,9 @@ export const FUNCTIONS = Object.freeze({
     maxArgs: 1,
     apply: ([x]) => {
       if (!Number.isInteger(x) || x < 0) throw domainError('fact', [x]);
-      // 170! 约为 7.26e306，是双精度能表示的最大阶乘；171! 直接溢出为 Infinity。
-      // 与其返回 Infinity 让上层困惑，不如在这里就说清楚原因。
+      // 170! is about 7.26e306, the largest factorial a double can represent; 171! simply
+      // overflows to Infinity. Rather than returning Infinity and confusing the layer above,
+      // it is better to state the reason clearly here.
       if (x > 170) {
         throw new CalculatorError(
           ErrorCodes.RESULT_NOT_FINITE,
@@ -174,7 +181,7 @@ export const FUNCTIONS = Object.freeze({
 });
 
 /**
- * 递归求值 AST。
+ * Recursively evaluate an AST.
  * @param {object} node
  * @returns {number}
  */
@@ -184,11 +191,12 @@ export function evaluate(node) {
       return node.value;
 
     case 'Constant': {
-      // 必须用 Object.hasOwn 判断「这是不是表里自己的键」，不能只判断 !== undefined。
-      // 原因：CONSTANTS 是普通对象，它的原型链上挂着 constructor / toString / valueOf 等属性。
-      // 若写成 `CONSTANTS[name] !== undefined`，那么输入 "constructor" 会命中
-      // Object.prototype.constructor（一个函数），从而绕过「未知标识符」检查，
-      // 把一个函数当成数值继续参与计算。这类漏洞属于原型链查找陷阱。
+      // Object.hasOwn must be used to test "is this the table's own key", not just !== undefined.
+      // The reason: CONSTANTS is an ordinary object, and its prototype chain carries constructor /
+      // toString / valueOf and so on. Written as `CONSTANTS[name] !== undefined`, the input
+      // "constructor" would hit Object.prototype.constructor (a function), bypass the unknown
+      // identifier check, and treat a function as a number in the following computation.
+      // This class of vulnerability is the prototype chain lookup trap.
       const value = Object.hasOwn(CONSTANTS, node.name) ? CONSTANTS[node.name] : undefined;
       if (value === undefined) {
         throw new CalculatorError(
@@ -226,9 +234,10 @@ export function evaluate(node) {
     }
 
     case 'Call': {
-      // 同理，函数白名单也必须用 Object.hasOwn 做归属判断。
-      // 否则 "constructor(1)" 会拿到原型链上的构造函数，随后在 spec.apply 处抛 TypeError，
-      // 把一个本该返回 400 的用户输入错误变成 500 服务端错误。
+      // Likewise, the function whitelist must use Object.hasOwn for the ownership test.
+      // Otherwise "constructor(1)" would fetch the constructor from the prototype chain and then
+      // throw a TypeError at spec.apply, turning a user input error that should return 400 into a
+      // 500 server error.
       const spec = Object.hasOwn(FUNCTIONS, node.name) ? FUNCTIONS[node.name] : undefined;
       if (spec === undefined) {
         throw new CalculatorError(
@@ -249,7 +258,7 @@ export function evaluate(node) {
         );
       }
 
-      // 参数从左到右求值，保持与数学书写顺序一致。
+      // Arguments are evaluated left to right, matching the order in which mathematics is written.
       return spec.apply(node.args.map(evaluate));
     }
 

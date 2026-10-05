@@ -1,10 +1,10 @@
 /**
- * 历史记录接口控制器。
+ * History endpoint controller.
  */
 
 import * as historyService from '../service/history.service.js';
 
-/** GET /api/history —— 分页查询历史记录 */
+/** GET /api/history — paginated history query */
 export function list(req, res, next) {
   try {
     const result = historyService.listHistory(req.query);
@@ -14,7 +14,7 @@ export function list(req, res, next) {
   }
 }
 
-/** GET /api/history/stats —— 汇总统计（扩展功能） */
+/** GET /api/history/stats — aggregate statistics (extension feature) */
 export function statistics(req, res, next) {
   try {
     res.status(200).json({ success: true, stats: historyService.getStatistics() });
@@ -24,12 +24,13 @@ export function statistics(req, res, next) {
 }
 
 /**
- * DELETE /api/history/:id —— 删除指定记录
+ * DELETE /api/history/:id — delete the specified record
  *
- * 状态码取舍：这里用 200 + 响应体，而不是 204 No Content。
- * 204 更「纯粹」，但前端拿不到「到底删了几条」，只能自己假设成功；
- * 而返回 { id, deleted } 让前端能确证删除生效，也让助教在浏览器里
- * 直接看到接口结果。对课程作业而言，可观测性比语义纯度更重要。
+ * Status code trade-off: this uses 200 plus a response body, rather than 204 No Content.
+ * 204 is more "pure", but the front end cannot learn "how many rows were actually deleted" and can
+ * only assume success; returning { id, deleted } lets the front end confirm the deletion took effect,
+ * and also lets the teaching assistant see the endpoint result directly in the browser.
+ * For a course assignment, observability matters more than semantic purity.
  */
 export function remove(req, res, next) {
   try {
@@ -40,7 +41,7 @@ export function remove(req, res, next) {
   }
 }
 
-/** DELETE /api/history —— 清空全部历史（清空属于扩展功能） */
+/** DELETE /api/history — clear all history (clearing is an extension feature) */
 export function clearAll(req, res, next) {
   try {
     const result = historyService.clearHistory();
@@ -51,9 +52,10 @@ export function clearAll(req, res, next) {
 }
 
 /**
- * PATCH /api/history/:id/favorite —— 切换收藏
- * 用 PATCH 而不是 PUT：这次修改只涉及 is_favorite 这一个字段，
- * 属于「局部更新」，PATCH 语义正确。PUT 意味着整体替换，会误导调用方以为要传完整对象。
+ * PATCH /api/history/:id/favorite — toggle favorite
+ * PATCH rather than PUT: this modification touches only the single field is_favorite, so it is a
+ * "partial update" and PATCH is semantically correct. PUT implies a whole-entity replacement, which
+ * would mislead callers into thinking they must send the complete object.
  */
 export function toggleFavorite(req, res, next) {
   try {

@@ -1,29 +1,33 @@
 # =============================================================================
-# systemd 服务单元 —— 计算器后端
+# systemd service unit — Calculator Backend
 #
-# 安装位置：/etc/systemd/system/calculator-backend.service
+# Installation path: /etc/systemd/system/calculator-backend.service
 #
-# ★ 推荐用脚本安装，不要手工复制本文件：
-#       sudo ./deploy/install-backend.sh --dry-run   # 先看会发生什么
-#       sudo ./deploy/install-backend.sh             # 正式安装
+# ★ Prefer installing with the script rather than copying this file by hand:
+#       sudo ./deploy/install-backend.sh --dry-run   # first see what will happen
+#       sudo ./deploy/install-backend.sh             # install for real
 #
-#   原因：本文件里的 <APP_DIR> 与 <NODE_BIN> 必须替换成绝对路径。
-#   实测发现只要漏替换一个（例如 <APP_DIR> 没换），systemd 会直接拒绝启动：
+#   Reason: the <APP_DIR> and <NODE_BIN> placeholders in this file must be
+#   replaced with absolute paths. In practice we found that if even one of them is
+#   left unreplaced (for example <APP_DIR>), systemd refuses to start outright:
 #
 #       WorkingDirectory= path is not absolute: <APP_DIR>
 #       Unit configuration has fatal error, unit will not be started.
 #
-#   而它**不会**提示你「忘了替换占位符」，排查时很容易误判成服务本身的问题。
-#   install-backend.sh 会从脚本自身位置推导路径并自动替换，随后再跑一次
-#   `systemd-analyze verify`，从根本上消除这个失败模式。
+#   And it does **not** tell you "you forgot to replace a placeholder", so while
+#   troubleshooting it is very easy to misdiagnose this as a problem with the
+#   service itself. install-backend.sh derives the paths from its own location and
+#   substitutes them automatically, then runs `systemd-analyze verify` once more,
+#   eliminating this failure mode at the root.
 #
-# 若确实要手工安装，替换占位符后务必先校验再启用：
+# If you really must install by hand, replace the placeholders and always verify
+# before enabling:
 #       sudo cp deploy/calculator-backend.service /etc/systemd/system/
 #       sudo systemd-analyze verify /etc/systemd/system/calculator-backend.service
 #       sudo systemctl daemon-reload
 #       sudo systemctl enable --now calculator-backend
 #
-# 查看日志：
+# Viewing the logs:
 #       sudo journalctl -u calculator-backend -f
 # =============================================================================
 
@@ -32,30 +36,34 @@ Description=Calculator Backend (Express + SQLite)
 After=network-online.target
 Wants=network-online.target
 
-# ---- 重启频率限制 ----
-# 注意：StartLimitIntervalSec / StartLimitBurst 属于 [Unit] 段，不是 [Service]。
-# systemd 229 之后它们从 [Service] 迁移到了 [Unit]。
-# 若误写在 [Service] 下，systemd 只会记一条 warning 然后忽略：
+# ---- Restart rate limiting ----
+# Note: StartLimitIntervalSec / StartLimitBurst belong to the [Unit] section, not [Service].
+# After systemd 229 they were moved from [Service] to [Unit].
+# If they are mistakenly written under [Service], systemd merely logs one warning and ignores them:
 #     Unknown key 'StartLimitIntervalSec' in section [Service], ignoring.
-# 结果是重启频率限制静默失效——服务会无限制反复重启而不停止报警。
-# 这类「不报错、只忽略」的配置错误最难发现，因此这里明确标注段落归属。
-# 含义：5 分钟内重启超过 10 次即认为故障无法自愈，停止尝试。
+# The result is that restart rate limiting silently stops working — the service restarts
+# over and over without ever stopping and raising an alarm.
+# Configuration errors of this kind — "no error, just ignored" — are the hardest to find,
+# which is why the section ownership is spelled out explicitly here.
+# Meaning: more than 10 restarts within 5 minutes is treated as a fault that cannot heal
+# itself, and further attempts stop.
 StartLimitIntervalSec=300
 StartLimitBurst=10
 
 [Service]
 Type=simple
 
-# ---- 运行身份 ----
-# 使用专用低权限用户，不用 root。
-# 创建方式：sudo useradd --system --shell /usr/sbin/nologin --home /opt/calculator calculator
+# ---- Run identity ----
+# Use a dedicated low-privilege user rather than root.
+# How to create it: sudo useradd --system --shell /usr/sbin/nologin --home /opt/calculator calculator
 User=calculator
 Group=calculator
 WorkingDirectory=<APP_DIR>
 
-# ---- 启动命令 ----
-# 直接用 node 启动，不经过 npm，少一层进程包装，信号能直达 Node 进程，
-# 这一点对优雅退出很重要（npm 会拦截 SIGTERM 导致后端收不到）。
+# ---- Start command ----
+# Start directly with node rather than through npm: one less process wrapper, and signals
+# reach the Node process directly. This matters for graceful shutdown
+# (npm intercepts SIGTERM, so the backend never receives it).
 Environment=NODE_ENV=production
 Environment=PORT=5000
 Environment=HOST=127.0.0.1
@@ -63,31 +71,34 @@ Environment=DB_FILE=<APP_DIR>/data/calculator.sqlite
 Environment=LOG_LEVEL=info
 ExecStart=<NODE_BIN> src/server.js
 
-# ---- 自动重启 ----
+# ---- Automatic restart ----
 Restart=always
 RestartSec=3
-# （重启频率限制 StartLimit* 已上移到 [Unit] 段，原因见那里的说明）
+# (The restart rate limits StartLimit* have been moved up to the [Unit] section; see the
+# explanation there.)
 
-# ---- 内存限制 ----
-# 本后端实测常驻内存约 55-75MB。这里给 192MB 上限作为安全边界：
-# 正常情况下永远不会触及；一旦出现内存泄漏，systemd 会重启进程而不是
-# 把整台机器拖垮（这点对与其它服务共存的服务器尤其重要）。
+# ---- Memory limits ----
+# Measured, this backend's resident memory is about 55-75MB. A 192MB ceiling is set here as
+# a safety boundary: under normal conditions it will never be approached, and should a
+# memory leak appear, systemd restarts the process instead of dragging the entire machine
+# down (this matters especially on servers shared with other services).
 MemoryHigh=160M
 MemoryMax=192M
-# 明确禁止使用 swap，避免内存压力大时后端被换出导致响应变慢
+# Explicitly forbid swap, so that under memory pressure the backend is not paged out and
+# made slow to respond
 MemorySwapMax=0
 
-# ---- 资源限制 ----
+# ---- Resource limits ----
 LimitNOFILE=65535
 TasksMax=128
 
-# ---- 安全加固 ----
-# 独立的 /tmp，防止与其它服务通过临时文件互相干扰
+# ---- Security hardening ----
+# A private /tmp, preventing interference with other services through temporary files
 PrivateTmp=true
 PrivateDevices=true
 ProtectSystem=strict
 ProtectHome=true
-# 只允许写数据目录
+# Only the data directory may be written
 ReadWritePaths=<APP_DIR>/data
 ProtectKernelTunables=true
 ProtectKernelModules=true
@@ -97,24 +108,28 @@ RestrictRealtime=true
 RestrictNamespaces=true
 LockPersonality=true
 
-# 注意：这里**刻意不启用** MemoryDenyWriteExecute。
+# Note: MemoryDenyWriteExecute is **deliberately not enabled** here.
 #
-# 它表面上很适合 Node 服务（「后端不需要可执行的内存页」），但实测会直接
-# 让 Node 起不来：V8 引擎的 JIT 需要同时可写可执行的内存页，而该选项禁止创建。
+# On the surface it suits a Node service ("the backend does not need executable memory
+# pages"), but in practice it stops Node from starting at all: the V8 engine's JIT needs
+# memory pages that are simultaneously writable and executable, and this option forbids
+# creating them.
 #
-# 实测证据（systemd 252 + Node 24.15.0）：
-#   MemoryDenyWriteExecute=yes  -> 进程退出码 255，无任何输出
-#   不加该选项                  -> 退出码 0，node:sqlite 与 HTTP 服务均正常
-#   （对照实验：node -e "process.exit(7)" 返回 7，证明退出码确实会传递）
+# Measured evidence (systemd 252 + Node 24.15.0):
+#   MemoryDenyWriteExecute=yes  -> process exit code 255, with no output at all
+#   without that option         -> exit code 0, node:sqlite and the HTTP service both work
+#   (control experiment: node -e "process.exit(7)" returns 7, proving exit codes really are propagated)
 #
-# 危险之处在于 systemd 只报一句笼统的服务启动失败，不会指出是这个选项导致的。
-# 其余的沙箱选项已实测与本服务兼容，可放心保留。
-# 若将来换成非 JIT 的运行时，可重新评估启用它。
+# The danger is that systemd reports only a generic service start failure and never points
+# out that this option caused it.
+# The remaining sandbox options have been measured to be compatible with this service and
+# can safely be kept.
+# If the runtime is ever switched to a non-JIT one, enabling it can be reconsidered.
 
-# 只允许 IPv4/IPv6 的 TCP 与 Unix 套接字
+# Only allow IPv4/IPv6 TCP and Unix sockets
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 
-# ---- 日志 ----
+# ---- Logging ----
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=calculator-backend
