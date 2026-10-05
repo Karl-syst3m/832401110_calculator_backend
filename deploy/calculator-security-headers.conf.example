@@ -1,0 +1,35 @@
+# =============================================================================
+# Shared security response headers — included from every location that declares
+# its own add_header.
+#
+# ★ Why this file exists (the nginx add_header inheritance trap)
+#
+# nginx's `add_header` does NOT merge with the parent context. If a `location`
+# declares even one add_header of its own, the entire set inherited from the
+# enclosing `server` block is discarded for that location.
+#
+# That means the four headers written at server level in calculator.conf do
+# **not** reach any location that sets its own Cache-Control, which is all three
+# of them in this project (static images, html/js/css, and /api/).
+#
+# Measured on the deployed site BEFORE this fix (curl -D - ):
+#     GET /                  -> Cache-Control only, no security headers
+#     GET /css/style.css     -> Cache-Control only, no security headers
+#     GET /api/health        -> Cache-Control only, no security headers
+# So Content-Security-Policy, which matters most on the HTML response, was
+# effectively switched off in production while looking correct in the config.
+#
+# nginx 1.26 has no `add_header_inherit merge` (that arrived in 1.29.3), so the
+# portable fix is to re-declare the headers where they are needed. Keeping them
+# in this one file means there is still a single place to edit.
+#
+# Install alongside the vhost:
+#     sudo cp deploy/nginx-bt-panel.conf.example            /www/server/panel/vhost/nginx/calculator.conf
+#     sudo cp deploy/calculator-security-headers.conf.example /www/server/panel/vhost/nginx/calculator-security-headers.conf
+#     sudo nginx -t && sudo systemctl reload nginx
+# =============================================================================
+
+add_header X-Content-Type-Options "nosniff" always;
+add_header X-Frame-Options "SAMEORIGIN" always;
+add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'" always;

@@ -17,6 +17,7 @@
  */
 
 import { AppError, AppErrorCodes } from '../errors/appError.js';
+import { CalculatorError, ErrorCodes } from '../calculator/errors.js';
 import { UNIT_CATEGORIES } from '../data/units.js';
 import { formatNumber } from '../calculator/format.js';
 
@@ -26,6 +27,13 @@ const MAX_BASE = 36;
 
 /** The valid digit characters of each base. */
 const DIGITS = '0123456789abcdefghijklmnopqrstuvwxyz';
+
+/**
+ * Digit budget for the fraction part when the expansion does not terminate in the target base (0.1 in
+ * binary, for example). It is a floor, not a hard cap: an identity conversion never truncates, see
+ * fractionToString.
+ */
+const DEFAULT_MAX_FRACTION_DIGITS = 16;
 
 /**
  * Validate a base value.
@@ -78,7 +86,18 @@ function parseInBase(rawValue, base) {
   // Normalize full-width decimal points, so users can paste from elsewhere.
   body = body.replace('。', '.').replace('．', '.');
 
-  const [integerPart = '', fractionPart = ''] = body.split('.');
+  // A number has at most one decimal point. Destructuring the split and keeping only the first two
+  // segments would silently discard the rest, so malformed input such as "1.2.3" used to come back as a
+  // successful conversion of "1.2"; it is rejected explicitly instead.
+  const segments = body.split('.');
+  if (segments.length > 2) {
+    throw new AppError(
+      AppErrorCodes.INVALID_BASE_CONVERSION,
+      `"${rawValue}" is not a valid number: it contains more than one decimal point.`,
+      { status: 400, detail: { value: rawValue } },
+    );
+  }
+  const [integerPart = '', fractionPart = ''] = segments;
   if (integerPart === '' && fractionPart === '') {
     throw new AppError(
       AppErrorCodes.INVALID_BASE_CONVERSION,
@@ -110,13 +129,33 @@ function parseInBase(rawValue, base) {
     integerValue = integerValue * bigBase + BigInt(DIGITS.indexOf(char));
   }
 
-  // Fraction part: convert to Number according to positional weight.
+  // Fraction part, exact rational form (value = numerator / denominator). The digit-by-digit conversion to
+  // the target base uses this instead of the floating-point value, so that no digit is ever produced by
+  // rounding error. The invariant numerator < denominator always holds: the digit sum is at most
+  // base^n - 1 for a denominator of base^n.
+  let fractionNumerator = 0n;
+  let fractionDenominator = 1n;
+  for (const char of fractionPart) {
+    fractionNumerator = fractionNumerator * bigBase + BigInt(DIGITS.indexOf(char));
+    fractionDenominator *= bigBase;
+  }
+
+  // Fraction part as a Number, used only for the informative decimalValue: the positional sum is always
+  // below 1 (each term is smaller than base^-i), so unlike the integer part it cannot overflow to Infinity.
   let fractionValue = 0;
   for (let i = 0; i < fractionPart.length; i += 1) {
     fractionValue += DIGITS.indexOf(fractionPart[i]) / base ** (i + 1);
   }
 
-  return { negative, integerValue, fractionValue, hasFraction: fractionPart !== '' };
+  return {
+    negative,
+    integerValue,
+    fractionValue,
+    fractionNumerator,
+    fractionDenominator,
+    fractionDigits: fractionPart.length,
+    hasFraction: fractionPart !== '',
+  };
 }
 
 /** Output the integer part as a string in the target base. */
@@ -142,21 +181,27 @@ function bigIntToString(value, base) {
  *   0.5*2   = 1.0  -> take integer 1, remainder 0
  * This gives .101; verification: 1/2 + 0/4 + 1/8 = 0.625 ✓
  *
- * @param {number} fraction a fraction between 0 and 1
+ * The fraction is carried as an exact rational and the arithmetic is done with BigInt. That is a
+ * correctness fix, not merely a precision one: with double arithmetic `Math.floor(current * base)` can
+ * round up to exactly `base`, and `DIGITS[base]` is one character past the end of the digit alphabet —
+ * which is how base 16 emitted the invalid digit "g" (and base 2 emitted "2"). Because the remainder is
+ * always smaller than the denominator, `digit = (remainder * base) / denominator` is at most base - 1 by
+ * construction, and the loop ends when the remainder is exactly zero, so a final digit is never fabricated.
+ *
+ * @param {bigint} numerator the fraction numerator (value = numerator / denominator)
+ * @param {bigint} denominator the fraction denominator
  * @param {number} base the target base
  * @param {number} maxDigits the maximum number of digits to output, preventing an infinite loop (such as 0.1 to binary)
  */
-function fractionToString(fraction, base, maxDigits = 16) {
+function fractionToString(numerator, denominator, base, maxDigits) {
   let result = '';
-  let current = fraction;
-  for (let i = 0; i < maxDigits && current > 0; i += 1) {
-    current *= base;
-    const digit = Math.floor(current);
+  let remainder = numerator;
+  const bigBase = BigInt(base);
+  for (let i = 0; i < maxDigits && remainder > 0n; i += 1) {
+    remainder *= bigBase;
+    const digit = Number(remainder / denominator);
     result += DIGITS[digit];
-    current -= digit;
-    // Double-precision error turns current into an extremely small nonzero value, producing meaningless
-    // trailing digits; 1e-12 is used here as the threshold for "already zero".
-    if (current < 1e-12) break;
+    remainder %= denominator;
   }
   return result;
 }
@@ -184,14 +229,37 @@ export function convertBase({ value, fromBase, toBase }) {
   const parsed = parseInBase(String(value), sourceBase);
 
   let output = bigIntToString(parsed.integerValue, targetBase);
-  if (parsed.hasFraction && parsed.fractionValue > 0) {
-    const fractionText = fractionToString(parsed.fractionValue, targetBase);
+  if (parsed.hasFraction && parsed.fractionNumerator > 0n) {
+    // The digit budget is never smaller than the source fraction, so an identity conversion
+    // (fromBase === toBase) always terminates before the cap and round-trips unchanged, while a
+    // non-terminating expansion (0.1 to binary) is truncated at the budget instead of being padded.
+    const maxDigits = Math.max(DEFAULT_MAX_FRACTION_DIGITS, parsed.fractionDigits);
+    const fractionText = fractionToString(
+      parsed.fractionNumerator,
+      parsed.fractionDenominator,
+      targetBase,
+      maxDigits,
+    );
     if (fractionText !== '') {
       output = `${output}.${fractionText}`;
     }
   }
-  if (parsed.negative && !(parsed.integerValue === 0n && parsed.fractionValue === 0)) {
+  if (parsed.negative && !(parsed.integerValue === 0n && parsed.fractionNumerator === 0n)) {
     output = `-${output}`;
+  }
+
+  // The integer part is arbitrary-precision BigInt, but decimalValue has to be a double: a 300-digit
+  // hexadecimal input has no finite decimal representation. Returning Infinity would contradict itself in
+  // the response body (JSON serialises Infinity as null while outputText says "Infinity"), so a result that
+  // does not fit is rejected exactly the way the calculation kernel rejects one.
+  const decimalValue = (parsed.negative ? -1 : 1)
+    * (Number(parsed.integerValue) + parsed.fractionValue);
+  if (!Number.isFinite(decimalValue)) {
+    throw new CalculatorError(
+      ErrorCodes.RESULT_NOT_FINITE,
+      'The result is out of the representable numeric range.',
+      { input: String(value), fromBase: sourceBase, toBase: targetBase },
+    );
   }
 
   return {
@@ -200,9 +268,7 @@ export function convertBase({ value, fromBase, toBase }) {
     toBase: targetBase,
     output,
     // The decimal value is also given, so the user can check it and keep calculating.
-    decimalValue: formatNumber(
-      (parsed.negative ? -1 : 1) * (Number(parsed.integerValue) + parsed.fractionValue),
-    ),
+    decimalValue: formatNumber(decimalValue),
   };
 }
 
@@ -227,7 +293,27 @@ export function convertUnit({ category, from, to, value }) {
   }
   const spec = UNIT_CATEGORIES[category];
 
-  const numericValue = typeof value === 'number' ? value : Number(value);
+  // Mirror convertBase's strictness. Calling Number(value) directly would silently turn "" and null into 0
+  // and true into 1, so an empty or missing value used to come back as a successful conversion of zero.
+  // Only an actual number or a non-empty numeric string is accepted.
+  if (typeof value !== 'number' && typeof value !== 'string') {
+    throw new AppError(
+      AppErrorCodes.INVALID_UNIT_CONVERSION,
+      'Field "value" is required and must be a number or a numeric string.',
+      { status: 400, detail: { receivedType: value === null ? 'null' : typeof value } },
+    );
+  }
+
+  const valueText = typeof value === 'string' ? value.trim() : null;
+  if (valueText === '') {
+    throw new AppError(
+      AppErrorCodes.INVALID_UNIT_CONVERSION,
+      'Field "value" must not be empty.',
+      { status: 400 },
+    );
+  }
+
+  const numericValue = typeof value === 'number' ? value : Number(valueText);
   if (!Number.isFinite(numericValue)) {
     throw new AppError(
       AppErrorCodes.INVALID_UNIT_CONVERSION,
@@ -254,6 +340,16 @@ export function convertUnit({ category, from, to, value }) {
     result = toUnit.fromBase(fromUnit.toBase(numericValue));
   } else {
     result = (numericValue * fromUnit.factor) / toUnit.factor;
+  }
+
+  // Same guard as the calculation kernel: 1e308 metres in nanometres overflows a double, and answering 200
+  // with output: null next to outputText: "Infinity" would be a self-contradictory response body.
+  if (!Number.isFinite(result)) {
+    throw new CalculatorError(
+      ErrorCodes.RESULT_NOT_FINITE,
+      'The result is out of the representable numeric range.',
+      { category, from, to, value: numericValue },
+    );
   }
 
   return {

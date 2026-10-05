@@ -15,12 +15,22 @@ import config from '../config/index.js';
 const VALID_SORT_FIELDS = new Set(['createdAt', 'result', 'id']);
 const VALID_ORDERS = new Set(['asc', 'desc']);
 
-/** Parse a string into an integer, returning null on failure. */
+/**
+ * Parse a string into an integer, returning null on failure.
+ *
+ * Anything that is not a safe integer counts as a failure. The range check is not cosmetic: pagination
+ * multiplies (page - 1) * pageSize, and a page near 2^53 makes that product exceed the int64 that SQLite
+ * accepts for LIMIT/OFFSET, so the driver raises SQLITE_MISMATCH ("datatype mismatch") — an internal
+ * exception that escaped as HTTP 500 instead of the caller's 400. The same helper validates the history id,
+ * where an unsafe integer would silently round to a neighbouring value in the "not found" message.
+ */
 function parseIntStrict(value) {
   if (typeof value !== 'string' && typeof value !== 'number') return null;
   const text = String(value).trim();
   if (!/^-?\d+$/.test(text)) return null;
-  return Number.parseInt(text, 10);
+  const parsed = Number.parseInt(text, 10);
+  if (!Number.isSafeInteger(parsed)) return null;
+  return parsed;
 }
 
 /**

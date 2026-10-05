@@ -79,6 +79,29 @@ server {
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
     add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'" always;
 
+    # ─────────────────────────────────────────────────────────────────────────
+    # ★ nginx's add_header does NOT inherit into a location that declares its own.
+    #
+    # This is a trap worth spelling out, because it cost us a real outage of the
+    # security headers. On a plain `location / { }` with no add_header of its own,
+    # nginx inherits the four headers above from the server block. But the moment a
+    # location declares ANY add_header, the server-level set is discarded **entirely**
+    # for that location — the two sets are not merged.
+    #
+    # Measured before the fix (curl -D - against the deployed site):
+    #   /                 -> only "Cache-Control: no-cache, must-revalidate"
+    #   /css/style.css    -> only "Cache-Control: no-cache, must-revalidate"
+    #   /api/health       -> only "Cache-Control: no-store"
+    # and NOT ONE of the four security headers was present on any of them —
+    # including Content-Security-Policy, which matters most on the HTML response.
+    # So the block above looked correct in review and was dead in production.
+    #
+    # nginx 1.26 does not have `add_header_inherit merge` (added in 1.29.3), so the
+    # fix is to repeat the security headers inside every location that sets any
+    # add_header of its own. The three locations below do that. If you add another
+    # location with its own add_header, you must repeat them there too.
+    # ─────────────────────────────────────────────────────────────────────────
+
     # ---- Compression ----
     gzip on;
     gzip_types text/plain text/css application/javascript application/json image/svg+xml;
@@ -97,12 +120,14 @@ server {
     location ~* \.(?:png|jpe?g|gif|webp|svg|ico|woff2?)$ {
         expires 30d;
         add_header Cache-Control "public, immutable";
+        include /www/server/panel/vhost/nginx/calculator-security-headers.conf;
         try_files $uri =404;
     }
 
     # HTML and JS/CSS are not cached, so an edit takes effect on the next refresh
     location ~* \.(?:html|js|css)$ {
         add_header Cache-Control "no-cache, must-revalidate";
+        include /www/server/panel/vhost/nginx/calculator-security-headers.conf;
         try_files $uri =404;
     }
 
@@ -123,6 +148,7 @@ server {
 
         proxy_buffering off;
         add_header Cache-Control "no-store";
+        include /www/server/panel/vhost/nginx/calculator-security-headers.conf;
     }
 
     # ---- Health check, convenient for external liveness probing ----

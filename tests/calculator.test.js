@@ -344,3 +344,99 @@ describe('Security: no eval / exec is used', () => {
     );
   });
 });
+
+describe('Conversion service regression (fraction digits, finiteness, validation)', () => {
+  const DIGIT_ALPHABET = '0123456789abcdefghijklmnopqrstuvwxyz';
+
+  test('no produced fraction digit is out of range for the target base', async () => {
+    const { convertBase } = await import('../src/service/conversion.service.js');
+
+    const cases = [
+      ['0.ffffffffffffffff', 16, 16],
+      ['0.' + '1'.repeat(54), 2, 2],
+      ['0.9999999999999999', 10, 10],
+      ['3.141592653589793', 10, 10],
+      ['0.101', 2, 10],
+      ['0.1', 10, 2],
+      ['0.zzzz', 36, 36],
+      ['0.987654321', 10, 36],
+    ];
+
+    for (const [value, fromBase, toBase] of cases) {
+      const { output } = convertBase({ value, fromBase, toBase });
+      const fraction = output.includes('.') ? output.split('.')[1] : '';
+      for (const digit of fraction) {
+        assert.ok(
+          DIGIT_ALPHABET.slice(0, toBase).includes(digit),
+          `Digit "${digit}" is not valid in base ${toBase} (${value} base ${fromBase} -> base ${toBase})`,
+        );
+      }
+    }
+  });
+
+  test('identity conversions round-trip and no digit is fabricated', async () => {
+    const { convertBase } = await import('../src/service/conversion.service.js');
+
+    // Regression: the fixed 16-digit re-expansion used to append a made-up digit
+    // ("3.141592653589793" -> "3.1415926535897930") and corrupt near-one fractions.
+    assert.equal(
+      convertBase({ value: '3.141592653589793', fromBase: 10, toBase: 10 }).output,
+      '3.141592653589793',
+    );
+    assert.equal(
+      convertBase({ value: '0.9999999999999999', fromBase: 10, toBase: 10 }).output,
+      '0.9999999999999999',
+    );
+    assert.equal(
+      convertBase({ value: '0.ffffffffffffffff', fromBase: 16, toBase: 16 }).output,
+      '0.ffffffffffffffff',
+    );
+    assert.equal(
+      convertBase({ value: '-' + '0.5', fromBase: 10, toBase: 10 }).output,
+      '-0.5',
+    );
+  });
+
+  test('a non-finite conversion result throws the calculation kernel error code', async () => {
+    const { convertBase, convertUnit } = await import('../src/service/conversion.service.js');
+    const { CalculatorError } = await import('../src/calculator/errors.js');
+
+    const isNotFinite = (error) => error instanceof CalculatorError && error.code === 'RESULT_NOT_FINITE';
+
+    assert.throws(
+      () => convertUnit({ category: 'length', from: 'm', to: 'nm', value: 1e308 }),
+      isNotFinite,
+    );
+    assert.throws(
+      () => convertUnit({ category: 'temperature', from: 'c', to: 'f', value: 1e308 }),
+      isNotFinite,
+    );
+    assert.throws(
+      () => convertBase({ value: 'f'.repeat(300), fromBase: 16, toBase: 10 }),
+      isNotFinite,
+    );
+  });
+
+  test('multiple decimal points and non-numeric unit values are rejected', async () => {
+    const { convertBase, convertUnit } = await import('../src/service/conversion.service.js');
+    const { AppError } = await import('../src/errors/appError.js');
+
+    assert.throws(
+      () => convertBase({ value: '1.2.3', fromBase: 10, toBase: 10 }),
+      (error) => error instanceof AppError && error.code === 'INVALID_BASE_CONVERSION',
+    );
+
+    // Number("") is 0, Number(null) is 0 and Number(true) is 1, so a type check must come before coercion.
+    for (const value of ['', '   ', null, true, undefined, [], {}]) {
+      assert.throws(
+        () => convertUnit({ category: 'length', from: 'm', to: 'cm', value }),
+        (error) => error instanceof AppError && error.code === 'INVALID_UNIT_CONVERSION',
+        `value ${JSON.stringify(value)} should be rejected`,
+      );
+    }
+
+    // The legitimate forms must keep working.
+    assert.equal(convertUnit({ category: 'length', from: 'm', to: 'cm', value: 1 }).output, 100);
+    assert.equal(convertUnit({ category: 'length', from: 'm', to: 'cm', value: '1.5' }).output, 150);
+  });
+});

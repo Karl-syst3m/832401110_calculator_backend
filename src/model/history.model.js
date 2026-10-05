@@ -126,7 +126,14 @@ export function findHistory({
     .get(...params);
   const total = Number(countRow.total);
 
-  const offset = (page - 1) * pageSize;
+  // Second layer of defense for the offset (the service already rejects an out-of-range page): SQLite binds
+  // LIMIT/OFFSET as int64, so an offset beyond that range makes the driver raise SQLITE_MISMATCH
+  // ("datatype mismatch"), an exception unrelated to the caller's actual mistake. Clamping keeps the
+  // statement valid; an offset past the end of the table yields an empty page either way.
+  const rawOffset = (page - 1) * pageSize;
+  const offset = Number.isSafeInteger(rawOffset) && rawOffset >= 0
+    ? rawOffset
+    : Number.MAX_SAFE_INTEGER;
   const rows = database
     .prepare(`
       SELECT * FROM calculation_history

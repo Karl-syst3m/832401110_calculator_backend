@@ -296,6 +296,32 @@ describe('History — Feature 3: persistence and queries', () => {
     assert.equal(zeroSize.status, 400);
   });
 
+  test('an out-of-range page returns 400 instead of crashing the query (regression)', async () => {
+    // (page - 1) * pageSize used to exceed the int64 range SQLite accepts for LIMIT/OFFSET, so the driver
+    // raised SQLITE_MISMATCH ("datatype mismatch") and the caller saw an unauthenticated HTTP 500 with
+    // code INTERNAL_ERROR. An unparseable number that is not a safe integer is now an ordinary 400.
+    for (const page of ['461168601842738790', '99999999999999999999', '9007199254740992']) {
+      const { status, body } = await api('GET', `/api/history?page=${page}`);
+      assert.equal(status, 400, `page=${page} should be rejected as a bad request`);
+      assert.equal(body.success, false);
+      assert.equal(body.code, 'INVALID_PAGINATION');
+      assert.notEqual(body.code, 'INTERNAL_ERROR');
+    }
+  });
+
+  test('the largest safe page is still accepted and simply yields an empty page', async () => {
+    await resetHistory();
+    await api('POST', '/api/calculate', { expression: '1+1' });
+
+    const { status, body } = await api(
+      'GET',
+      `/api/history?page=${Number.MAX_SAFE_INTEGER}&pageSize=100`,
+    );
+    assert.equal(status, 200);
+    assert.equal(body.success, true);
+    assert.equal(body.items.length, 0);
+  });
+
   test('pageSize is forced within the upper limit', async () => {
     await resetHistory();
     await api('POST', '/api/calculate', { expression: '1+1' });
@@ -348,6 +374,16 @@ describe('History — Feature 4: deletion', () => {
 
     const negative = await api('DELETE', '/api/history/-5');
     assert.equal(negative.status, 400);
+  });
+
+  test('an out-of-range id returns 400 instead of being silently rounded (regression)', async () => {
+    // The same helper validates the history id: an integer beyond Number.MAX_SAFE_INTEGER used to round to
+    // 100000000000000000000 and come back as a 404 for an id the caller never sent.
+    const { status, body } = await api('DELETE', '/api/history/99999999999999999999');
+    assert.equal(status, 400);
+    assert.equal(body.success, false);
+    assert.equal(body.code, 'INVALID_HISTORY_ID');
+    assert.equal(body.detail.received, '99999999999999999999');
   });
 
   test('clear all history', async () => {
@@ -541,6 +577,163 @@ describe('Extension features: unit conversion', () => {
     const temperature = body.categories.find((category) => category.key === 'temperature');
     assert.equal(temperature.kind, 'affine');
     assert.ok(temperature.units.some((unit) => unit.key === 'c'));
+  });
+});
+
+describe('Regression: non-finite conversion results are rejected', () => {
+  /** Convert a base and return the raw response. */
+  async function convertBase(payload) {
+    return api('POST', '/api/convert/base', payload);
+  }
+
+  test('a unit conversion that overflows a double returns 400 with the calculator error code', async () => {
+    const cases = [
+      { category: 'length', from: 'm', to: 'nm', value: 1e308 },
+      { category: 'temperature', from: 'c', to: 'f', value: 1e308 },
+    ];
+    for (const payload of cases) {
+      const { status, body } = await api('POST', '/api/convert/unit', payload);
+      assert.equal(status, 400, `${payload.category} conversion should be rejected`);
+      assert.equal(body.success, false);
+      assert.equal(body.code, 'RESULT_NOT_FINITE');
+      // The self-contradictory pair output: null (Infinity serialised) next to outputText: "Infinity"
+      // must never be produced again.
+      assert.equal(body.output, undefined);
+      assert.equal(body.outputText, undefined);
+    }
+  });
+
+  test('a base conversion whose decimal value overflows returns 400 with the calculator error code', async () => {
+    const { status, body } = await convertBase({
+      value: 'f'.repeat(300),
+      fromBase: 16,
+      toBase: 10,
+    });
+    assert.equal(status, 400);
+    assert.equal(body.success, false);
+    assert.equal(body.code, 'RESULT_NOT_FINITE');
+    // decimalValue must be finite or absent — never the string "Infinity"
+    assert.notEqual(body.decimalValue, 'Infinity');
+    assert.equal(body.decimalValue, undefined);
+  });
+
+  test('the calculation kernel uses the same code for the same situation', async () => {
+    const { status, body } = await api('POST', '/api/calculate', { expression: '1e308*10' });
+    assert.equal(status, 400);
+    assert.equal(body.code, 'RESULT_NOT_FINITE');
+  });
+});
+
+describe('Regression: base-conversion fraction digits', () => {
+  const DIGIT_ALPHABET = '0123456789abcdefghijklmnopqrstuvwxyz';
+
+  const convert = (value, fromBase, toBase) =>
+    api('POST', '/api/convert/base', { value, fromBase, toBase });
+
+  /** The fraction part of a converted value (empty string when there is none). */
+  const fractionOf = (output) => (output.includes('.') ? output.split('.')[1] : '');
+
+  test('hex fraction no longer emits the invalid digit "g"', async () => {
+    const { status, body } = await convert('0.ffffffffffffffff', 16, 16);
+    assert.equal(status, 200);
+    assert.equal(body.output, '0.ffffffffffffffff');
+    assert.ok(!body.output.includes('g'), 'base 16 has no digit "g"');
+  });
+
+  test('an all-ones binary fraction no longer emits the invalid digit "2"', async () => {
+    const value = `0.${'1'.repeat(54)}`;
+    const { status, body } = await convert(value, 2, 2);
+    assert.equal(status, 200);
+    assert.equal(body.output, value);
+    assert.ok(!body.output.includes('2'), 'base 2 has no digit "2"');
+  });
+
+  test('identity conversions round-trip instead of being silently corrupted', async () => {
+    // "0.9999999999999999" used to come back as "0.9999999999999998", and "3.141592653589793" gained a
+    // fabricated 16th digit.
+    const cases = [
+      ['0.9999999999999999', 10],
+      ['3.141592653589793', 10],
+      ['0.ffffffffffffffff', 16],
+      ['0.7777777777777777777777', 8],
+      ['-0.5', 10],
+    ];
+    for (const [value, base] of cases) {
+      const { body } = await convert(value, base, base);
+      assert.equal(body.output, value, `${value} base ${base} should round-trip unchanged`);
+    }
+  });
+
+  test('every produced digit is valid for the target base', async () => {
+    const cases = [
+      ['0.ffffffffffffffff', 16, 2],
+      ['0.ffffffffffffffff', 16, 10],
+      ['0.101', 2, 10],
+      ['0.1', 10, 2],
+      ['0.987654321', 10, 36],
+      ['0.zzzzzz', 36, 10],
+      ['0.1111111111111111', 2, 16],
+    ];
+    for (const [value, fromBase, toBase] of cases) {
+      const { status, body } = await convert(value, fromBase, toBase);
+      assert.equal(status, 200);
+      const fraction = fractionOf(body.output);
+      assert.ok(fraction.length > 0, `${value} should keep a fraction part`);
+      for (const digit of fraction) {
+        assert.ok(
+          DIGIT_ALPHABET.slice(0, toBase).includes(digit),
+          `Digit "${digit}" is not valid in base ${toBase} (from ${value} base ${fromBase})`,
+        );
+      }
+    }
+  });
+
+  test('the exact integer path still uses BigInt and loses no precision', async () => {
+    const { body } = await convert('ffffffffffffffff', 16, 10);
+    assert.equal(body.output, '18446744073709551615');
+  });
+});
+
+describe('Regression: conversion input validation', () => {
+  test('a value with more than one decimal point is rejected', async () => {
+    const { status, body } = await api('POST', '/api/convert/base', {
+      value: '1.2.3',
+      fromBase: 10,
+      toBase: 10,
+    });
+    assert.equal(status, 400);
+    assert.equal(body.success, false);
+    assert.equal(body.code, 'INVALID_BASE_CONVERSION');
+    assert.equal(body.output, undefined);
+  });
+
+  test('empty, null and boolean unit values are rejected instead of becoming 0 or 1', async () => {
+    const badValues = ['', '   ', null, true, undefined, [], {}];
+    for (const value of badValues) {
+      const { status, body } = await api('POST', '/api/convert/unit', {
+        category: 'length',
+        from: 'm',
+        to: 'cm',
+        value,
+      });
+      assert.equal(status, 400, `value ${JSON.stringify(value)} should be rejected`);
+      assert.equal(body.success, false);
+      assert.equal(body.code, 'INVALID_UNIT_CONVERSION');
+    }
+  });
+
+  test('a numeric number and a numeric string are still accepted', async () => {
+    const fromNumber = await api('POST', '/api/convert/unit', {
+      category: 'length', from: 'm', to: 'cm', value: 1,
+    });
+    assert.equal(fromNumber.status, 200);
+    assert.equal(fromNumber.body.outputText, '100');
+
+    const fromString = await api('POST', '/api/convert/unit', {
+      category: 'length', from: 'm', to: 'cm', value: '1.5',
+    });
+    assert.equal(fromString.status, 200);
+    assert.equal(fromString.body.outputText, '150');
   });
 });
 
