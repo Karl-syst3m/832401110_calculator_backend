@@ -78,10 +78,11 @@ RestartSec=3
 # explanation there.)
 
 # ---- Memory limits ----
-# Measured, this backend's resident memory is about 55-75MB. A 192MB ceiling is set here as
-# a safety boundary: under normal conditions it will never be approached, and should a
-# memory leak appear, systemd restarts the process instead of dragging the entire machine
-# down (this matters especially on servers shared with other services).
+# Measured, this backend's resident memory is about 20MB at rest and up to about
+# 44MB after a burst of large base conversions (BigInt-heavy), so a 192MB ceiling
+# leaves roughly a 4x margin. Under normal conditions it will never be approached,
+# and should a memory leak appear, systemd restarts the process instead of dragging
+# the entire machine down (this matters especially on servers shared with other services).
 MemoryHigh=160M
 MemoryMax=192M
 # Explicitly forbid swap, so that under memory pressure the backend is not paged out and

@@ -830,7 +830,7 @@ with other services also running on the same machine):
 
 | Item | Usage |
 | --- | --- |
-| Backend process resident memory (RSS) | about 55–75 MB |
+| Backend process resident memory (RSS) | about 20 MB at rest; up to about 44 MB after a burst of large base conversions |
 | Node runtime + dependencies on disk | about 40 MB |
 | Frontend static files | about 100 KB |
 | SQLite data file (one thousand records) | about 100–200 KB |
