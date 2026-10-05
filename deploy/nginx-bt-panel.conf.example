@@ -1,0 +1,141 @@
+# =============================================================================
+# nginx 站点配置 —— 宝塔面板（BT Panel）环境专用
+#
+# ★ 落点：/www/server/panel/vhost/nginx/calculator.conf
+#
+# 为什么不是 /etc/nginx/sites-available/ ？
+# 本机 nginx 由宝塔面板管理，编译前缀是 /www/server/nginx
+# （`nginx -V` 显示 --prefix=/www/server/nginx），
+# 实际情况是：
+#   - /etc/nginx/nginx.conf         不存在
+#   - /etc/nginx/sites-available/   不存在
+#   - /etc/nginx/sites-enabled/     不存在（是空的）
+#   - /etc/nginx/ 下只有 ssl/ 与 htpasswd_dsh（给面板自己的服务用）
+# 因此按 Debian 惯例把配置放进 sites-available 再软链到 sites-enabled，
+# 在这台机器上**完全不会生效**。
+#
+# 真正生效的路径是 /www/server/nginx/conf/nginx.conf 末尾的：
+#     include /www/server/panel/vhost/nginx/*.conf;
+# 所以只要把本文件放到那个目录下就会被加载。
+# 面板不会覆盖手工放入的 .conf 文件（它只重写自己创建的站点文件）。
+#
+# ---------------------------------------------------------------------------
+# 端口选择：80
+#
+# 为什么不另开 8000？因为实测发现本机的放行规则是**两层白名单**：
+#   ufw        : 仅放行 22, 80, 443, 6185, 8443, 8889, 8899, 6100
+#   云安全组    : 实测 80 / 8443 / 6185 / 8899 / 6100 可达，
+#                443 可达（无监听故回 RST），
+#                888 / 8000 / 8080 / 3306 全部被丢弃
+# 也就是说用 8000 必须同时修改 ufw 并在云控制台添加安全组规则，
+# 而 80 已经是现成的、双层都放行的端口，零改动即可使用。
+#
+# 为什么不写 default_server ？
+# 80 端口上已有宝塔内置的状态服务（server_name 127.0.0.1，
+# 提供 /nginx_status、/phpfpm_xx_status 等监控端点，依赖默认 server 行为）。
+# 我们用自己的 IP 作 server_name 做**精确匹配**即可，
+# 无需也不应抢夺 default_server，这样两边的行为都不受影响。
+#
+# 部署前必须替换的占位符：
+#   <SERVER_IP>      服务器公网 IP，例如 103.236.57.2
+#   <FRONTEND_ROOT>  前端静态文件目录，本机建议 /www/wwwroot/calculator
+#
+# 启用步骤：
+#   sudo cp deploy/nginx-bt-panel.conf.example /www/server/panel/vhost/nginx/calculator.conf
+#   sudo sed -i 's/<SERVER_IP>/你的IP/; s|<FRONTEND_ROOT>|/www/wwwroot/calculator|' \
+#        /www/server/panel/vhost/nginx/calculator.conf
+#   sudo nginx -t && sudo systemctl reload nginx
+#
+# 回滚（只需删除文件并重载）：
+#   sudo rm /www/server/panel/vhost/nginx/calculator.conf
+#   sudo nginx -t && sudo systemctl reload nginx
+# =============================================================================
+
+upstream calculator_backend {
+    # 后端只监听回环地址，不直接暴露公网，所有流量经 nginx 转发
+    server 127.0.0.1:5000;
+    keepalive 16;
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+
+    # 用公网 IP 作 server_name：访问 http://<IP>/ 时 Host 头就是该 IP，
+    # 因此会精确命中这个 server 块，
+    # 而 Host 为 127.0.0.1 的面板监控请求仍然由宝塔的块处理。
+    server_name <SERVER_IP>;
+
+    # ---- 基础安全响应头 ----
+    # 刻意不设置 Strict-Transport-Security（HSTS）：
+    # 本站在纯 HTTP 下运行，设置 HSTS 会让浏览器记住「此站点以后只走 HTTPS」，
+    # 而 IP 又没有证书，结果是把访问者锁在门外。
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'" always;
+
+    # ---- 压缩 ----
+    gzip on;
+    gzip_types text/plain text/css application/javascript application/json image/svg+xml;
+    gzip_min_length 1024;
+
+    # ---- 前端静态文件 ----
+    root <FRONTEND_ROOT>;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # 图片与字体长缓存；本项目文件名不含指纹，因此只对这类资源长缓存
+    location ~* \.(?:png|jpe?g|gif|webp|svg|ico|woff2?)$ {
+        expires 30d;
+        add_header Cache-Control "public, immutable";
+        try_files $uri =404;
+    }
+
+    # HTML 与 JS/CSS 不缓存，保证改完刷新即生效
+    location ~* \.(?:html|js|css)$ {
+        add_header Cache-Control "no-cache, must-revalidate";
+        try_files $uri =404;
+    }
+
+    # ---- 后端接口反向代理 ----
+    location /api/ {
+        proxy_pass http://calculator_backend;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection        "";
+
+        proxy_connect_timeout 5s;
+        proxy_send_timeout    15s;
+        proxy_read_timeout    15s;
+
+        proxy_buffering off;
+        add_header Cache-Control "no-store";
+    }
+
+    # ---- 便于外部探活的健康检查 ----
+    location = /healthz {
+        proxy_pass http://calculator_backend/api/health;
+        access_log off;
+    }
+
+    # ---- 禁止访问隐藏文件、源码与数据文件 ----
+    # README.md / codestyle.md 放在仓库里是有意义的，
+    # 但不应出现在 Web 目录；这条规则是第二道防线。
+    location ~ /\. {
+        deny all;
+        return 404;
+    }
+
+    location ~* \.(?:md|sqlite|sqlite-wal|sqlite-shm|log|bak|env)$ {
+        deny all;
+        return 404;
+    }
+}

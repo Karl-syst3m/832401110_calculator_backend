@@ -1,0 +1,29 @@
+{
+  "name": "calculator-backend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "前后端分离计算器系统 - 后端服务（Express + node:sqlite）",
+  "type": "module",
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test",
+    "init-db": "node scripts/init-db.js",
+    "seed": "node scripts/seed.js",
+    "seed:clear": "node scripts/seed.js --clear"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  },
+  "keywords": [
+    "calculator",
+    "express",
+    "sqlite",
+    "front-end-back-end-separation"
+  ],
+  "license": "MIT"
+}
